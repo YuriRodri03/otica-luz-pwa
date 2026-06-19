@@ -222,7 +222,7 @@ export default function Dashboard() {
           {/* GRÁFICO ANUAL: Altura responsiva menor no mobile para caber na tela */}
           <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-sm">
             <div className="flex items-center space-x-2 mb-6"><BarChart3 className="w-4 h-4 text-royalBlue" /><h3 className="font-bold text-royalBlue text-xs sm:text-sm uppercase">Crescimento Anual</h3></div>
-            <div className="h-60 sm:h-72 w-full">
+            <div className="h-60 sm:h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dadosAnuais} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />

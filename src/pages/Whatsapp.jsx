@@ -6,8 +6,7 @@ export default function WhatsappControl() {
   const [qr, setQr] = useState(null);
   const [carregando, setCarregando] = useState(false);
 
-  // Altere para a URL do Render quando fizer o deploy
-  const API_URL = 'http://localhost:8080'; 
+  const API_URL = import.meta.env.VITE_API_URL || 'https://otica-luz-pwa.onrender.com'; 
 
   const checarStatusConexao = async () => {
     try {
