@@ -24,3 +24,8 @@ dist-ssr
 *.sw?
 
 .env
+
+# Sessões e Tokens do Servidor
+server/tokens/
+*.pma
+*.dat
