@@ -66,7 +66,7 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP
+// 4. INICIALIZAÇÃO DO WHATSAPP (OTIMIZADA PARA O RENDER)
 // ==========================================
 function inicializarWhatsApp() {
   wppconnect
@@ -85,7 +85,21 @@ function inicializarWhatsApp() {
       useChrome: false,
       debug: false,
       logQR: false,
-      autoClose: 0, 
+      autoClose: 0,
+      // 🔥 CONFIGURAÇÕES CRUCIAIS PARA PREVENIR CRASH NO RENDER:
+      puppeteerOptions: {
+        userDataDir: '/opt/render/project/src/server/tokens/otica-luz-session', // Direciona os tokens para a pasta persistente local
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage', // Força o Chrome a usar disco temporário em vez de RAM compartilhada
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process', // Força o navegador a rodar em uma única thread (economia extrema de RAM)
+          '--disable-gpu' // Desativa renderização de gráficos pesados por hardware
+        ]
+      }
     })
     .then((client) => {
       whatsappClient = client;
