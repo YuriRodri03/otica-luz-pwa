@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Loader2, CheckCircle2, AlertTriangle, CalendarDays, Filter } from 'lucide-react'
+import { Loader2, CheckCircle2, AlertTriangle, CalendarDays, Filter, XCircle, CheckCircle } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Crediario() {
@@ -13,6 +13,17 @@ export default function Crediario() {
   const [anoSelecionado, setAnoSelecionado] = useState(dataAtual.getFullYear().toString())
   const [mesSelecionado, setMesSelecionado] = useState(String(dataAtual.getMonth() + 1).padStart(2, '0'))
   const [statusFiltro, setStatusFiltro] = useState('urgentes') // 'urgentes', 'todos', 'Pago', 'Atrasado'
+
+  // ==========================================
+  // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
+  // ==========================================
+  const [alertaConfig, setAlertaConfig] = useState({
+    aberto: false,
+    tipo: 'aviso', // 'confirmacao' | 'erro' | 'sucesso'
+    titulo: '',
+    mensagem: '',
+    onConfirmar: null
+  })
 
   // ==========================================
   // LEITURA DOS CARNÊS DIRETO DAS TABELAS NOVAS
@@ -80,29 +91,46 @@ export default function Crediario() {
   // ==========================================
   // EFETUAR RECEBIMENTO E ATUALIZAR TABELAS
   // ==========================================
-  const darBaixa = async (item) => {
-    const confirmou = window.confirm(`Confirmar recebimento de R$ ${item.valorParcela.toFixed(2)} de ${item.cliente}?`)
-    if (!confirmou) return
+  const darBaixa = (item) => {
+    setAlertaConfig({
+      aberto: true,
+      tipo: 'confirmacao',
+      titulo: 'Confirmar Recebimento',
+      mensagem: `Deseja homologar o recebimento no valor de R$ ${item.valorParcela.toFixed(2)} referente à parcela ${item.parcelaNumero} do cliente ${item.cliente}?`,
+      onConfirmar: async () => {
+        try {
+          await turso.execute({
+            sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?",
+            args: [parseInt(item.idUnique)]
+          })
 
-    try {
-      await turso.execute({
-        sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?",
-        args: [parseInt(item.idUnique)]
-      })
+          const descricaoAuditoria = `[Baixa de Carnê] Parcela ${item.parcelaNumero} - Cliente: ${item.cliente} (CPF: ${item.cpf}) | RefChave: ${item.idVendaOrigem}_${item.parcelaNumero.split('/')[0]}`
 
-      const descricaoAuditoria = `[Baixa de Carnê] Parcela ${item.parcelaNumero} - Cliente: ${item.cliente} (CPF: ${item.cpf}) | RefChave: ${item.idVendaOrigem}_${item.parcelaNumero.split('/')[0]}`
+          await turso.execute({
+            sql: "INSERT INTO lancamentos (descricao, tipo, valor, metodo, data) VALUES (?, ?, ?, ?, ?)",
+            args: [descricaoAuditoria, 'entrada', item.valorParcela, 'Dinheiro', new Date().toISOString()]
+          })
 
-      await turso.execute({
-        sql: "INSERT INTO lancamentos (descricao, tipo, valor, metodo, data) VALUES (?, ?, ?, ?, ?)",
-        args: [descricaoAuditoria, 'entrada', item.valorParcela, 'Dinheiro', new Date().toISOString()]
-      })
-
-      await carregarCrediarioDoBanco()
-      alert("Recebimento liquidado com sucesso!")
-    } catch (error) {
-      console.error("Erro ao liquidar parcela no Turso:", error)
-      alert("Erro ao processar o recebimento no banco de dados.")
-    }
+          await carregarCrediarioDoBanco()
+          setAlertaConfig({
+            aberto: true,
+            tipo: 'sucesso',
+            titulo: 'Liquidado!',
+            mensagem: 'O pagamento foi registrado no carnê e o fluxo de caixa foi atualizado.',
+            onConfirmar: null
+          })
+        } catch (error) {
+          console.error("Erro ao liquidar parcela no Turso:", error)
+          setAlertaConfig({
+            aberto: true,
+            tipo: 'erro',
+            titulo: 'Falha Operacional',
+            mensagem: 'Não foi possível processar o recebimento no banco de dados.',
+            onConfirmar: null
+          })
+        }
+      }
+    })
   }
 
   // ==========================================
@@ -256,6 +284,62 @@ export default function Crediario() {
           </div>
         </div>
       )}
+
+      {/* 🔔 MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO DA ÓTICA LUZ */}
+      {alertaConfig.aberto && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
+            <div className="p-5 space-y-4">
+              <div className="flex items-start space-x-3">
+                <div className={`p-2 rounded-xl shrink-0 ${
+                  alertaConfig.tipo === 'confirmacao' || alertaConfig.tipo === 'aviso'
+                    ? 'bg-amber-50 text-amber-600' 
+                    : alertaConfig.tipo === 'sucesso' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+                }`}>
+                  {alertaConfig.tipo === 'erro' ? <XCircle className="w-6 h-6" /> : alertaConfig.tipo === 'sucesso' ? <CheckCircle className="w-6 h-6" /> : <AlertTriangle className="w-6 h-6" />}
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <h3 className="text-base font-bold text-slate-800 tracking-tight">{alertaConfig.titulo}</h3>
+                  <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">{alertaConfig.mensagem}</p>
+                </div>
+              </div>
+
+              <div className="flex space-x-2 pt-2 justify-end">
+                {alertaConfig.tipo === 'confirmacao' ? (
+                  <>
+                    <button 
+                      type="button" 
+                      onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors"
+                    >
+                      Não, voltar
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        if (alertaConfig.onConfirmar) alertaConfig.onConfirmar();
+                        setAlertaConfig(prev => ({ ...prev, aberto: false }));
+                      }} 
+                      className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm transition-colors"
+                    >
+                      Sim, executar
+                    </button>
+                  </>
+                ) : (
+                  <button 
+                    type="button" 
+                    onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} 
+                    className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors"
+                  >
+                    Entendido
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

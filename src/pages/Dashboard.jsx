@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { 
   TrendingUp, PieChart as PieIcon, BarChart3, Users, 
-  ShieldAlert, Award, Loader2 
+  ShieldAlert, Award, Loader2, ArrowDownCircle
 } from 'lucide-react'
 import { 
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, 
@@ -29,6 +29,7 @@ export default function Dashboard() {
   })
   const [dadosAnuais, setDadosAnuais] = useState([])
   const [vendasMensais, setVendasMensais] = useState([])
+  const [totalDespesasPagasMes, setTotalDespesasPagasMes] = useState(0) // Novo estado para controle de custos
   const [dadosLinha, setDadosLinha] = useState([])
   const [dadosPizza, setDadosPizza] = useState([])
 
@@ -42,18 +43,22 @@ export default function Dashboard() {
       // 1. CONTAGEM TOTAL DE CLIENTES ATIVOS
       const resClientes = await turso.execute("SELECT COUNT(*) as total FROM clientes")
       
-      // 2. FUNDO DE RESERVA REAL (Entradas de todas as vendas + Parcelas de Carnê efetivamente PAGAS)
+      // 2. FUNDO DE RESERVA REAL CORRIGIDO (Entradas + Parcelas - Despesas Efetivamente PAGAS)
       const resCaixaVendas = await turso.execute("SELECT SUM(valor_entrada) as total_entradas FROM vendas")
       const resCaixaParcelas = await turso.execute("SELECT SUM(valor_parcela) as total_parcelas_pagas FROM parcelas_carne WHERE status = 'Pago'")
+      const resTotalDespesas = await turso.execute("SELECT SUM(valor) as total_despesas FROM despesas WHERE paga = 1")
       
       const totalEntradasVendas = resCaixaVendas.rows[0].total_entradas || 0
       const totalParcelasPagas = resCaixaParcelas.rows[0].total_parcelas_pagas || 0
-      const caixaDisponivelReal = totalEntradasVendas + totalParcelasPagas
+      const totalDespesasPagasAcumulado = resTotalDespesas.rows[0].total_despesas || 0
+      
+      // Descontando as despesas reais pagas do caixa total disponível
+      const caixaDisponivelReal = (totalEntradasVendas + totalParcelasPagas) - totalDespesasPagasAcumulado
 
-      // 3. TICKET MÉDIO REAL (Baseado no valor líquido final das vendas)
+      // 3. TICKET MÉDIO REAL
       const resTicket = await turso.execute("SELECT AVG(total_liquido) as media FROM vendas")
 
-      // 4. TAXA DE INADIMPLÊNCIA CRONOLÓGICA (Parcelas vencidas pendentes vs Total de parcelas geradas)
+      // 4. TAXA DE INADIMPLÊNCIA CRONOLÓGICA
       const hojeStr = new Date().toISOString().split('T')[0]
       const resInadimplencia = await turso.execute(`
         SELECT 
@@ -76,14 +81,21 @@ export default function Dashboard() {
         inadimplencia: taxaInadimplencia
       })
 
-      // 5. COMPARATIVO ANUAL DE FATURAMENTO
-      const resAnual = await turso.execute(`
+      // 5. COMPARATIVO ANUAL DE FATURAMENTO (LÍQUIDO: Vendas - Despesas Pagas)
+      const resAnualvendas = await turso.execute(`
         SELECT 
-          strftime('%m', criado_em) as mes,
-          SUM(CASE WHEN strftime('%Y', criado_em) = '2025' THEN total_liquido ELSE 0 END) as total2025,
-          SUM(CASE WHEN strftime('%Y', criado_em) = '2026' THEN total_liquido ELSE 0 END) as total2026
-        FROM vendas 
-        GROUP BY mes
+          mes,
+          SUM(vendas2025) as v2025, SUM(vendas2026) as v2026,
+          SUM(desp2025) as d2025, SUM(desp2026) as d2026
+        FROM (
+          SELECT strftime('%m', criado_em) as mes, total_liquido as vendas2025, 0 as vendas2026, 0 as desp2025, 0 as desp2026 FROM vendas WHERE strftime('%Y', criado_em) = '2025'
+          UNION ALL
+          SELECT strftime('%m', criado_em) as mes, 0 as vendas2025, total_liquido as vendas2026, 0 as desp2025, 0 as desp2026 FROM vendas WHERE strftime('%Y', criado_em) = '2026'
+          UNION ALL
+          SELECT strftime('%m', data) as mes, 0 as vendas2025, 0 as vendas2026, valor as desp2025, 0 as desp2026 FROM despesas WHERE strftime('%Y', data) = '2025' AND paga = 1
+          UNION ALL
+          SELECT strftime('%m', data) as mes, 0 as vendas2025, 0 as vendas2026, 0 as desp2025, valor as desp2026 FROM despesas WHERE strftime('%Y', data) = '2026' AND paga = 1
+        ) GROUP BY mes
       `)
       
       let possuiFaturamento2025 = false
@@ -92,18 +104,19 @@ export default function Dashboard() {
       const mesesLabels = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
       const formatadoAnual = mesesLabels.map((label, index) => {
         const mesNum = (index + 1).toString().padStart(2, '0')
-        const achado = resAnual.rows.find(r => r.mes === mesNum)
+        const achado = resAnualvendas.rows.find(r => r.mes === mesNum)
         
-        const valor2025 = achado?.total2025 || 0
-        const valor2026 = achado?.total2026 || 0
+        // Lucro real = Faturamento - Custos operacionais pagos
+        const valor2025 = (achado?.v2025 || 0) - (achado?.d2025 || 0)
+        const valor2026 = (achado?.v2026 || 0) - (achado?.d2026 || 0)
 
-        if (valor2025 > 0) possuiFaturamento2025 = true
-        if (valor2026 > 0) possuiFaturamento2026 = true
+        if ((achado?.v2025 || 0) > 0) possuiFaturamento2025 = true
+        if ((achado?.v2026 || 0) > 0) possuiFaturamento2026 = true
 
         return { 
           name: label, 
-          "Faturamento 2025": valor2025, 
-          "Faturamento 2026": valor2026 
+          "Faturamento 2025": valor2025 < 0 ? 0 : valor2025, 
+          "Faturamento 2026": valor2026 < 0 ? 0 : valor2026 
         }
       })
       
@@ -111,7 +124,7 @@ export default function Dashboard() {
       setTemDados2025(possuiFaturamento2025)
       setTemDados2026(possuiFaturamento2026)
 
-      // 6. MONITORAMENTO MENSAL DETALHADO
+      // 6. MONITORAMENTO MENSAL DETALHADO (VENDAS + DESPESAS DO MÊS SELECIONADO)
       const mesFormatado = mesFiltro.toString().padStart(2, '0')
       
       const resVendasMensais = await turso.execute(`
@@ -124,6 +137,15 @@ export default function Dashboard() {
       `)
       setVendasMensais(resVendasMensais.rows)
 
+      // Puxa as despesas pagas do mês selecionado para abater nos cards de fechamento
+      const resDespesasMensais = await turso.execute(`
+        SELECT SUM(valor) as total_mes FROM despesas
+        WHERE strftime('%m', data) = '${mesFormatado}'
+        AND strftime('%Y', data) = '${anoFiltro}'
+        AND paga = 1
+      `)
+      setTotalDespesasPagasMes(resDespesasMensais.rows[0].total_mes || 0)
+
       const resMetodos = await turso.execute(`
         SELECT metodo_venda, SUM(total_liquido) as total FROM vendas 
         WHERE strftime('%m', criado_em) = '${mesFormatado}' AND strftime('%Y', criado_em) = '${anoFiltro}'
@@ -132,12 +154,15 @@ export default function Dashboard() {
       const CORES = ['#002060', '#D4AF37', '#8D6E63', '#AA7C11']
       setDadosPizza(resMetodos.rows.map((r, i) => ({ name: r.metodo_venda, value: r.total, color: CORES[i % CORES.length] })))
 
-      const resDias = await turso.execute(`
-        SELECT strftime('%d', criado_em) as dia, SUM(total_liquido) as total FROM vendas 
-        WHERE strftime('%m', criado_em) = '${mesFormatado}' AND strftime('%Y', criado_em) = '${anoFiltro}'
-        GROUP BY dia
+      // Unifica no gráfico de linha a tendência diária líquida do mês (Vendas - Custos)
+      const resDiasMovimentacao = await turso.execute(`
+        SELECT dia, SUM(vendas_dia) as v_dia, SUM(despesas_dia) as d_dia FROM (
+          SELECT strftime('%d', criado_em) as dia, total_liquido as vendas_dia, 0 as despesas_dia FROM vendas WHERE strftime('%m', criado_em) = '${mesFormatado}' AND strftime('%Y', criado_em) = '${anoFiltro}'
+          UNION ALL
+          SELECT strftime('%d', data) as dia, 0 as vendas_dia, valor as despesas_dia FROM despesas WHERE strftime('%m', data) = '${mesFormatado}' AND strftime('%Y', data) = '${anoFiltro}' AND paga = 1
+        ) GROUP BY dia ORDER BY dia ASC
       `)
-      setDadosLinha(resDias.rows.map(r => ({ name: `Dia ${r.dia}`, Vendas: r.total })))
+      setDadosLinha(resDiasMovimentacao.rows.map(r => ({ name: `Dia ${r.dia}`, "Saldo Diário": (r.v_dia - r.d_dia) })))
 
     } catch (e) {
       console.error("Erro na transição e leitura relacional do Dashboard:", e)
@@ -154,14 +179,17 @@ export default function Dashboard() {
     return metodoFiltroTabela === 'todos' || v.metodo_venda === metodoFiltroTabela
   })
 
+  // Faturamento Comercial Bruto do mês selecionado
   const faturamentoMensalTotal = vendasMensais.reduce((sum, v) => sum + v.total_liquido, 0)
-  const caixaImediatoMensal = vendasMensais.reduce((sum, v) => sum + v.valor_entrada + (v.metodo_venda !== 'Crediário' ? (v.total_liquido - v.valor_entrada) : 0), 0)
+  
+  // Lucro Real Efetivo = Arrecadação de Vendas do mês menos custos liquidados
+  const caixaImediatoMensal = vendasMensais.reduce((sum, v) => sum + v.valor_entrada + (v.metodo_venda !== 'Crediário' ? (v.total_liquido - v.valor_entrada) : 0), 0) - totalDespesasPagasMes
 
   if (carregando) {
     return (
       <div className="h-96 flex flex-col items-center justify-center text-royalBlue px-4 text-center">
         <Loader2 className="w-12 h-12 animate-spin mb-4" />
-        <p className="font-bold animate-pulse">Computando relatórios das tabelas de vendas...</p>
+        <p className="font-bold animate-pulse">Computando relatórios das tabelas de vendas e despesas...</p>
       </div>
     )
   }
@@ -169,12 +197,12 @@ export default function Dashboard() {
   return (
     <div className="space-y-6 px-2 sm:px-4 max-w-full overflow-hidden">
       
-      {/* HEADER: Flexível para empilhar no mobile e alinhar no desktop */}
+      {/* HEADER */}
       <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-royalBlue tracking-tight">Painel Financeiro</h2>
           <p className="text-xs sm:text-sm text-slate-500">
-            {abaAtiva === 'macro' ? 'Indicadores patrimoniais da Ótica Luz.' : 'Auditoria e fechamento operacional mensal.'}
+            {abaAtiva === 'macro' ? 'Indicadores patrimoniais líquidos da Ótica Luz.' : 'Auditoria e fechamento operacional unificado (Vendas e Custos).'}
           </p>
         </div>
 
@@ -191,7 +219,7 @@ export default function Dashboard() {
         )}
       </header>
 
-      {/* ABAS DO SISTEMA */}
+      {/* ABAS */}
       <div className="flex space-x-2 border-b border-slate-200 mb-2 overflow-x-auto whitespace-nowrap scrollbar-none">
         <button onClick={() => setAbaAtiva('macro')} className={`py-2 px-3 sm:px-4 font-semibold text-xs sm:text-sm border-b-2 transition-all ${abaAtiva === 'macro' ? 'border-gold text-royalBlue font-bold' : 'border-transparent text-slate-400'}`}>Visão Geral (Macro)</button>
         <button onClick={() => setAbaAtiva('mensal')} className={`py-2 px-3 sm:px-4 font-semibold text-xs sm:text-sm border-b-2 transition-all ${abaAtiva === 'mensal' ? 'border-gold text-royalBlue font-bold' : 'border-transparent text-slate-400'}`}>Fechamento (Mensal)</button>
@@ -199,11 +227,11 @@ export default function Dashboard() {
 
       {abaAtiva === 'macro' ? (
         <div className="space-y-6">
-          {/* CARDS MACRO: Ajustados de 1 coluna (mobile) até 4 (desktop) */}
+          {/* CARDS MACRO */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
             <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
               <div className="p-3 bg-royalBlue/10 text-royalBlue rounded-xl shrink-0"><Award className="w-5 h-5 sm:w-6 sm:h-6" /></div>
-              <div><span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block">Fundo de Reserva</span><p className="text-lg sm:text-xl font-bold text-slate-800">R$ {metricasMacro.patrimonio.toFixed(2)}</p></div>
+              <div><span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block">Caixa Líquido Atual</span><p className="text-lg sm:text-xl font-bold text-slate-800">R$ {metricasMacro.patrimonio.toFixed(2)}</p></div>
             </div>
             <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center space-x-4">
               <div className="p-3 bg-gold/10 text-gold-dark rounded-xl shrink-0"><Users className="w-5 h-5 sm:w-6 sm:h-6" /></div>
@@ -219,9 +247,9 @@ export default function Dashboard() {
             </div>
           </div>
           
-          {/* GRÁFICO ANUAL: Altura responsiva menor no mobile para caber na tela */}
+          {/* GRÁFICO ANUAL */}
           <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-sm">
-            <div className="flex items-center space-x-2 mb-6"><BarChart3 className="w-4 h-4 text-royalBlue" /><h3 className="font-bold text-royalBlue text-xs sm:text-sm uppercase">Crescimento Anual</h3></div>
+            <div className="flex items-center space-x-2 mb-6"><BarChart3 className="w-4 h-4 text-royalBlue" /><h3 className="font-bold text-royalBlue text-xs sm:text-sm uppercase">Lucro Líquido Comparativo</h3></div>
             <div className="h-60 sm:h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dadosAnuais} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -239,26 +267,32 @@ export default function Dashboard() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* METRICAS DO MÊS: Grid empilhável */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-            <div className="p-5 sm:p-6 rounded-2xl border border-slate-200 bg-white">
-              <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block mb-1">Faturamento Comercial Bruto</span>
-              <p className="text-2xl sm:text-3xl font-bold text-slate-800">R$ {faturamentoMensalTotal.toFixed(2)}</p>
+          {/* METRICAS DO MÊS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+            <div className="p-5 rounded-2xl border border-slate-200 bg-white">
+              <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block mb-1">Vendas Brutas (Mês)</span>
+              <p className="text-xl sm:text-2xl font-bold text-slate-800">R$ {faturamentoMensalTotal.toFixed(2)}</p>
             </div>
-            <div className="p-5 sm:p-6 rounded-2xl border border-slate-200 bg-white">
-              <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block mb-1">Arrecadação Imediata (Caixa Mês)</span>
-              <p className="text-2xl sm:text-3xl font-bold text-emerald-600">R$ {caixaImediatoMensal.toFixed(2)}</p>
+            <div className="p-5 rounded-2xl border border-slate-200 bg-white">
+              <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block mb-1">Despesas Pagas (Mês)</span>
+              <p className="text-xl sm:text-2xl font-bold text-rose-600">R$ {totalDespesasPagasMes.toFixed(2)}</p>
             </div>
-            <div onClick={() => setMetodoFiltroTabela('todos')} className="bg-royalBlue text-white p-5 sm:p-6 rounded-2xl shadow-md border-b-4 border-gold cursor-pointer sm:col-span-2 lg:col-span-1">
+            <div className="p-5 rounded-2xl border border-slate-200 bg-white">
+              <span className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase block mb-1">Saldo Líquido em Caixa</span>
+              <p className={`text-xl sm:text-2xl font-bold ${caixaImediatoMensal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                R$ {caixaImediatoMensal.toFixed(2)}
+              </p>
+            </div>
+            <div onClick={() => setMetodoFiltroTabela('todos')} className="bg-royalBlue text-white p-5 rounded-2xl shadow-md border-b-4 border-gold cursor-pointer">
               <span className="text-[10px] sm:text-xs font-bold text-slate-300 uppercase block mb-1">Volume de Pedidos</span>
-              <p className="text-2xl sm:text-3xl font-bold text-gold">{vendasMensais.length} ordens</p>
+              <p className="text-xl sm:text-2xl font-bold text-gold">{vendasMensais.length} ordens</p>
             </div>
           </div>
 
-          {/* GRÁFICOS DO MÊS: Empilhados em telas menores (lg:grid-cols-3) */}
+          {/* GRÁFICOS DO MÊS */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <h3 className="font-bold text-royalBlue text-xs sm:text-sm uppercase mb-6">Tendência de Vendas</h3>
+              <h3 className="font-bold text-royalBlue text-xs sm:text-sm uppercase mb-6">Tendência de Saldo Diário Líquido</h3>
               <div className="h-56 sm:h-64 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={dadosLinha} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -266,7 +300,7 @@ export default function Dashboard() {
                     <XAxis dataKey="name" fontSize={10} tickLine={false} />
                     <YAxis fontSize={10} tickLine={false} />
                     <Tooltip />
-                    <Area type="monotone" dataKey="Vendas" stroke="#002060" fill="#002060" fillOpacity={0.1} />
+                    <Area type="monotone" dataKey="Saldo Diário" stroke="#002060" fill="#002060" fillOpacity={0.1} />
                   </AreaChart>
                 </ResponsiveContainer>
               </div>
@@ -288,7 +322,7 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* TABELA COM CONTROLE DE SCROLL: O segredo para não quebrar telas pequenas */}
+          {/* TABELA */}
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="bg-slate-50 p-4 flex justify-between items-center border-b border-slate-200">
               <h3 className="font-bold text-royalBlue text-xs sm:text-sm uppercase">Auditoria de Vendas Homologadas</h3>
@@ -297,7 +331,6 @@ export default function Dashboard() {
               )}
             </div>
             
-            {/* Div mágica de rolagem lateral horizontal apenas para a tabela */}
             <div className="w-full overflow-x-auto min-w-full inline-block align-middle">
               <table className="w-full text-left border-collapse whitespace-nowrap">
                 <thead>

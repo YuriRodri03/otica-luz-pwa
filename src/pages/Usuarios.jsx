@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Loader2, UserPlus, Shield, Mail, Lock, UserCheck, Trash2 } from 'lucide-react'
+import { Loader2, UserPlus, Shield, Mail, Lock, UserCheck, Trash2, AlertTriangle, XCircle, CheckCircle } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Usuarios() {
@@ -11,11 +11,22 @@ export default function Usuarios() {
   const estaLogado = !!usuarioSessao.id 
   const éAdministrador = usuarioSessao.cargo === 'Administrador'
 
-  // Estados do formulário (Se for público, o padrão inicial vira estritamente Vendedor)
+  // Estados do formulário
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
   const [cargo, setCargo] = useState('Vendedor')
+
+  // ==========================================
+  // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
+  // ==========================================
+  const [alertaConfig, setAlertaConfig] = useState({
+    aberto: false,
+    tipo: 'aviso', // 'confirmacao' | 'erro' | 'sucesso'
+    titulo: '',
+    mensagem: '',
+    onConfirmar: null
+  })
 
   const carregarUsuarios = async () => {
     if (!estaLogado) return
@@ -45,8 +56,6 @@ export default function Usuarios() {
     e.preventDefault()
     if (!nome || !email || !senha) return
 
-    // TRAVA DE SEGURANÇA MÁXIMA: Se não estiver logado como administrador, 
-    // impede a criação forçada de contas com privilégios gerenciais
     const cargoFinal = éAdministrador ? cargo : 'Vendedor'
 
     try {
@@ -55,7 +64,14 @@ export default function Usuarios() {
         args: [nome.trim(), email.trim().toLowerCase(), senha, cargoFinal]
       })
 
-      alert(`Usuário ${nome} cadastrado com sucesso como ${cargoFinal}!`)
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'sucesso',
+        titulo: 'Sucesso',
+        mensagem: `Usuário ${nome} cadastrado com sucesso como ${cargoFinal}!`,
+        onConfirmar: null
+      })
+
       setNome('')
       setEmail('')
       setSenha('')
@@ -66,30 +82,61 @@ export default function Usuarios() {
       }
     } catch (error) {
       console.error("Erro ao cadastrar usuário:", error)
-      alert("Erro ao cadastrar! Verifique se este e-mail já está em uso.")
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'erro',
+        titulo: 'Falha no Cadastro',
+        mensagem: 'Erro ao cadastrar! Verifique se este e-mail já está em uso na equipe.',
+        onConfirmar: null
+      })
     }
   }
 
-  const handleDeletarUsuario = async (id, nomeUser) => {
+  const handleDeletarUsuario = (id, nomeUser) => {
     if (!estaLogado) return
 
     if (id === usuarioSessao.id) {
-      alert("Operação negada! Você não pode revogar o seu próprio acesso enquanto estiver logado no sistema.")
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'erro',
+        titulo: 'Operação Negada',
+        mensagem: 'Você não pode revogar o seu próprio acesso enquanto estiver logado no sistema.',
+        onConfirmar: null
+      })
       return
     }
 
-    if (!window.confirm(`Remover o acesso de "${nomeUser}" do sistema permanentemente?`)) return
-
-    try {
-      await turso.execute({
-        sql: "DELETE FROM usuarios WHERE id = ?",
-        args: [id]
-      })
-      await carregarUsuarios()
-    } catch (error) {
-      console.error("Erro ao remover usuário:", error)
-      alert("Não foi possível excluir o usuário selecionado.")
-    }
+    setAlertaConfig({
+      aberto: true,
+      tipo: 'confirmacao',
+      titulo: 'Remover Operador',
+      mensagem: `Tem certeza que deseja remover o acesso de "${nomeUser}" do sistema permanentemente?`,
+      onConfirmar: async () => {
+        try {
+          await turso.execute({
+            sql: "DELETE FROM usuarios WHERE id = ?",
+            args: [id]
+          })
+          await carregarUsuarios()
+          setAlertaConfig({
+            aberto: true,
+            tipo: 'sucesso',
+            titulo: 'Acesso Revogado',
+            mensagem: 'O usuário foi removido do quadro de funcionários ativos.',
+            onConfirmar: null
+          })
+        } catch (error) {
+          console.error("Erro ao remover usuário:", error)
+          setAlertaConfig({
+            aberto: true,
+            tipo: 'erro',
+            titulo: 'Erro Operacional',
+            mensagem: 'Não foi possível excluir o usuário selecionado no banco Turso.',
+            onConfirmar: null
+          })
+        }
+      }
+    })
   }
 
   return (
@@ -107,7 +154,7 @@ export default function Usuarios() {
         </p>
       </header>
 
-      {/* COMPORTAMENTO DINÂMICO DE GRIDS (1 COLUNA NO MOBILE / 3 COLUNAS NO DESKTOP SE LOGADO) */}
+      {/* COMPORTAMENTO DINÂMICO DE GRIDS */}
       <div className={estaLogado ? "grid grid-cols-1 lg:grid-cols-3 gap-6" : "w-full max-w-md mx-auto"}>
         
         {/* FORMULÁRIO DE CADASTRO */}
@@ -174,7 +221,7 @@ export default function Usuarios() {
           </form>
         </div>
 
-        {/* LISTAGEM DE USUÁRIOS ATIVOS RESPONSIVA (COM CONTÊINER DE SCROLL SE LOGADO) */}
+        {/* LISTAGEM DE USUÁRIOS ATIVOS */}
         {estaLogado && (
           <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
             {carregando ? (
@@ -212,6 +259,7 @@ export default function Usuarios() {
                         </td>
                         <td className="p-3 sm:p-4 text-center">
                           <button 
+                            type="button"
                             onClick={() => handleDeletarUsuario(user.id, user.nome)}
                             disabled={user.id === usuarioSessao.id}
                             className={`p-1.5 rounded-lg transition-colors ${
@@ -233,6 +281,62 @@ export default function Usuarios() {
           </div>
         )}
       </div>
+
+      {/* 🔔 MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO DA ÓTICA LUZ */}
+      {alertaConfig.aberto && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
+            <div className="p-5 space-y-4">
+              <div className="flex items-start space-x-3">
+                <div className={`p-2 rounded-xl shrink-0 ${
+                  alertaConfig.tipo === 'confirmacao' || alertaConfig.tipo === 'aviso'
+                    ? 'bg-amber-50 text-amber-600' 
+                    : alertaConfig.tipo === 'sucesso' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+                }`}>
+                  {alertaConfig.tipo === 'erro' ? <XCircle className="w-6 h-6" /> : alertaConfig.tipo === 'sucesso' ? <CheckCircle className="w-6 h-6" /> : <AlertTriangle className="w-6 h-6" />}
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <h3 className="text-base font-bold text-slate-800 tracking-tight">{alertaConfig.titulo}</h3>
+                  <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">{alertaConfig.mensagem}</p>
+                </div>
+              </div>
+
+              <div className="flex space-x-2 pt-2 justify-end">
+                {alertaConfig.tipo === 'confirmacao' ? (
+                  <>
+                    <button 
+                      type="button" 
+                      onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} 
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors"
+                    >
+                      Não, manter
+                    </button>
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        if (alertaConfig.onConfirmar) alertaConfig.onConfirmar();
+                        setAlertaConfig(prev => ({ ...prev, aberto: false }));
+                      }} 
+                      className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm transition-colors"
+                    >
+                      Sim, executar
+                    </button>
+                  </>
+                ) : (
+                  <button 
+                    type="button" 
+                    onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} 
+                    className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors"
+                  >
+                    Entendido
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

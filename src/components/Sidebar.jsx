@@ -19,48 +19,48 @@ export default function Sidebar({ telaAtiva, setTelaAtiva }) {
   // Lista mapeada com os IDs de controle que configuramos no main.jsx
   const itensMenu = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'fluxo', label: 'Caixa', icon: DollarSign }, // Reduzido "Fluxo" para mobile
-    { id: 'crediario', label: 'Crediário', icon: FileText }, // Reduzido para mobile
+    { id: 'fluxo', label: 'Caixa', fullLabel: 'Fluxo de Caixa', icon: DollarSign },
+    { id: 'crediario', label: 'Crediário', fullLabel: 'Crediário / Carnês', icon: FileText },
     { id: 'clientes', label: 'Clientes', icon: Users },
-    { id: 'usuarios', label: 'Equipe', icon: UserCheck },
-    { id: 'whatsapp', label: 'Zap', icon: MessageSquare },
+    { id: 'usuarios', label: 'Equipe', fullLabel: 'Equipe / Usuários', icon: UserCheck },
+    { id: 'whatsapp', label: 'Zap', fullLabel: 'Conexão WhatsApp', icon: MessageSquare },
   ]
 
   return (
     <>
       {/* ------------------------------------------------------------- */}
-      {/* 1. VISÃO DESKTOP / TABLET: SIDEBAR LATERAL PADRÃO              */}
+      {/* 1. VISÃO DESKTOP / TABLET: SIDEBAR LATERAL PREMIUM            */}
       {/* ------------------------------------------------------------- */}
       <div 
-        className={`hidden lg:flex h-screen bg-royalBlue text-white flex-col border-r-4 border-gold sticky top-0 transition-all duration-300 relative shrink-0 ${
+        className={`hidden lg:flex h-screen bg-royalBlue text-white flex-col border-r border-slate-800 sticky top-0 transition-all duration-300 relative shrink-0 z-50 shadow-xl ${
           minimizado ? 'w-20' : 'w-64'
         }`}
       >
-        {/* BOTÃO FLUTUANTE PARA MINIMIZAR/EXPANDIR */}
+        {/* BOTÃO FLUTUANTE DE CONTROLE DE EXPANSÃO */}
         <button
           onClick={() => setMinimizado(!minimizado)}
-          className="absolute -right-3 top-20 bg-gold text-wood-dark p-1 rounded-full border border-gold hover:scale-110 shadow-md transition-all z-50"
+          className="absolute -right-3 top-8 bg-slate-900 text-gold p-1 rounded-full border border-slate-800 hover:scale-110 shadow-lg transition-all z-50 active:scale-95"
           title={minimizado ? "Expandir Menu" : "Minimizar Menu"}
         >
-          {minimizado ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          {minimizado ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
         </button>
 
         {/* LOGO / BRANDING */}
-        <div className="p-6 border-b border-royalBlue-light text-center overflow-hidden whitespace-nowrap h-24 flex flex-col justify-center">
+        <div className="p-6 text-center overflow-hidden whitespace-nowrap h-20 flex flex-col justify-center border-b border-white/5 bg-slate-950/20">
           {minimizado ? (
-            <h1 className="text-xl font-black text-gold font-serif">OL</h1>
+            <h1 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-tr from-amber-300 to-gold tracking-wider">OL</h1>
           ) : (
-            <>
-              <h1 className="text-xl font-bold tracking-wider">
-                ÓTICA <span className="text-gold">LUZ</span>
+            <div className="text-left px-2">
+              <h1 className="text-lg font-extrabold tracking-wider text-white">
+                ÓTICA <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-gold">LUZ</span>
               </h1>
-              <p className="text-xs text-slate-300 mt-1">Gestão Comercial & Financeira</p>
-            </>
+              <p className="text-[10px] text-slate-400 font-semibold tracking-wide uppercase mt-0.5">ERP comercial</p>
+            </div>
           )}
         </div>
         
-        {/* LINKS DE NAVEGAÇÃO POR BOTÕES DE ESTADO */}
-        <nav className="flex-1 p-4 space-y-2 overflow-x-hidden">
+        {/* LINKS DE NAVEGAÇÃO INTERATIVOS */}
+        <nav className="flex-1 p-3 space-y-1 overflow-x-hidden mt-4">
           {itensMenu.map((item) => {
             const Icone = item.icon
             const isActive = telaAtiva === item.id
@@ -70,29 +70,41 @@ export default function Sidebar({ telaAtiva, setTelaAtiva }) {
                 key={item.id}
                 onClick={() => setTelaAtiva(item.id)}
                 className={`
-                  w-full flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-all group
-                  ${isActive ? 'bg-gold text-wood-dark font-bold shadow-md' : 'hover:bg-royalBlue-light text-slate-200'}
-                  ${minimizado ? 'justify-center space-x-0' : 'space-x-3'}
+                  w-full flex items-center px-4 py-3 rounded-xl text-sm font-semibold transition-all group relative
+                  ${isActive 
+                    ? 'bg-gradient-to-r from-amber-400 to-gold text-slate-950 font-bold shadow-md shadow-gold/10' 
+                    : 'text-slate-300 hover:bg-white/5 hover:text-white'
+                  }
+                  ${minimizado ? 'justify-center space-x-0' : 'space-x-3.5'}
                 `}
                 title={minimizado ? item.label : ""}
               >
-                <Icone className="w-5 h-5 flex-shrink-0" />
-                {!minimizado && <span className="animate-fadeIn">{item.id === 'fluxo' ? 'Fluxo de Caixa' : item.id === 'crediario' ? 'Crediário / Carnês' : item.id === 'usuarios' ? 'Equipe / Usuários' : item.id === 'whatsapp' ? 'Conexão WhatsApp' : item.label}</span>}
+                <Icone className={`w-4 h-4 flex-shrink-0 transition-transform ${isActive ? 'scale-105' : 'group-hover:scale-105'}`} />
+                {!minimizado && (
+                  <span className="truncate tracking-wide text-xs">
+                    {item.fullLabel || item.label}
+                  </span>
+                )}
+                
+                {/* Indicador luminoso lateral discreto no modo ativo */}
+                {isActive && minimizado && (
+                  <div className="absolute right-0 top-3 bottom-3 w-1 bg-slate-950 rounded-l-md" />
+                )}
               </button>
             )
           })}
         </nav>
         
         {/* FOOTER DA SIDEBAR */}
-        <div className="p-4 border-t border-royalBlue-light text-center text-slate-400 text-xs whitespace-nowrap overflow-hidden">
-          {minimizado ? "v1.3" : "v1.3.0 © Ótica Luz"}
+        <div className="p-4 border-t border-white/5 text-center text-slate-500 text-[10px] font-semibold tracking-wider bg-slate-950/10">
+          {minimizado ? "v1.3" : "SYSTEM V1.3.0 © ÓTICA LUZ"}
         </div>
       </div>
 
       {/* ------------------------------------------------------------- */}
-      {/* 2. VISÃO MOBILE: BARRA DE NAVEGAÇÃO INFERIOR ESTILO APP (PWA) */}
+      {/* 2. VISÃO MOBILE: BARRA INFERIOR MODERNA (ESTILO MOBILE FIRST) */}
       {/* ------------------------------------------------------------- */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-royalBlue border-t-4 border-gold text-white flex items-center justify-around px-2 z-50 shadow-2xl">
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 backdrop-blur-md border-t border-white/5 text-white flex items-center justify-around px-3 z-50 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.3)]">
         {itensMenu.map((item) => {
           const Icone = item.icon
           const isActive = telaAtiva === item.id
@@ -101,14 +113,20 @@ export default function Sidebar({ telaAtiva, setTelaAtiva }) {
             <button
               key={item.id}
               onClick={() => setTelaAtiva(item.id)}
-              className={`flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-95 text-center truncate ${
-                isActive ? 'text-gold font-bold bg-royalBlue-light/40 border-b-2 border-gold' : 'text-slate-300'
-              }`}
+              className="flex flex-col items-center justify-center flex-1 h-full py-1 transition-all active:scale-90 text-center relative"
             >
-              <Icone className={`w-5 h-5 mb-0.5 shrink-0 ${isActive ? 'text-gold' : 'text-slate-300'}`} />
-              <span className="text-[10px] tracking-tight block truncate w-full max-w-[55px]">
-                {item.label}
-              </span>
+              <div 
+                className={`p-1.5 rounded-xl flex flex-col items-center justify-center w-12 transition-all ${
+                  isActive 
+                    ? 'bg-gradient-to-b from-amber-400/20 to-gold/10 text-gold scale-105' 
+                    : 'text-slate-400'
+                }`}
+              >
+                <Icone className={`w-4 h-4 mb-0.5 ${isActive ? 'text-gold' : 'text-slate-400'}`} />
+                <span className={`text-[9px] tracking-tight block font-medium truncate w-full ${isActive ? 'text-gold font-bold' : 'text-slate-500'}`}>
+                  {item.label}
+                </span>
+              </div>
             </button>
           )
         })}

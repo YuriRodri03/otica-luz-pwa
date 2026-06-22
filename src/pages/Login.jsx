@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ShoppingBag, Loader2, Lock, Mail } from 'lucide-react'
+import { ShoppingBag, Loader2, Lock, Mail, XCircle, AlertTriangle } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Login({ setUsuarioLogado }) {
@@ -9,6 +9,15 @@ export default function Login({ setUsuarioLogado }) {
   const [carregando, setCarregando] = useState(false)
   const [erro, setErro] = useState('')
   const navigate = useNavigate()
+
+  // ==========================================
+  // ESTADO PARA MODAL DE ERRO CRÍTICO INTEGRADO
+  // ==========================================
+  const [alertaConfig, setAlertaConfig] = useState({
+    aberto: false,
+    titulo: '',
+    mensagem: ''
+  })
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -30,7 +39,7 @@ export default function Login({ setUsuarioLogado }) {
 
       const usuario = resultado.rows[0]
 
-      // Verificação simples de senha (em produção, utilize hashes criptografados)
+      // Verificação de credenciais
       if (usuario.senha === senha) {
         const dadosSession = {
           id: usuario.id,
@@ -39,7 +48,6 @@ export default function Login({ setUsuarioLogado }) {
           cargo: usuario.cargo
         }
 
-        // Salva no localStorage para manter logado mesmo se atualizar a página
         localStorage.setItem('oticaLuz_user', JSON.stringify(dadosSession))
         setUsuarioLogado(dadosSession)
         navigate('/') // Redireciona para a Dashboard
@@ -48,29 +56,36 @@ export default function Login({ setUsuarioLogado }) {
       }
     } catch (error) {
       console.error("Erro na autenticação:", error)
-      setErro('Erro ao conectar com o servidor.')
+      setAlertaConfig({
+        aberto: true,
+        titulo: 'Erro de Comunicação',
+        mensagem: 'Falha operacional ao tentar estabelecer conexão segura com a nuvem do Turso. Verifique sua rede local.'
+      })
     } finally {
       setCarregando(false)
     }
   }
 
   return (
-    /* ALTERADO: De 'fixed' para 'min-h-screen' com scroll flexível para evitar que o teclado do celular cubra o botão */
-    <div className="min-h-screen w-full bg-slate-900 flex items-center justify-center p-4 z-50 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold my-auto">
+    <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center p-4 z-50 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold my-auto animate-scaleIn">
         
+        {/* BRANDING DE ENTRADA */}
         <div className="bg-royalBlue p-6 text-white text-center">
-          <div className="flex items-center justify-center space-x-2 mb-2">
+          <div className="flex items-center justify-center space-x-2.5 mb-2">
             <ShoppingBag className="w-6 h-6 text-gold shrink-0" />
-            <h1 className="text-xl sm:text-2xl font-bold tracking-wider">ÓTICA <span className="text-gold">LUZ</span></h1>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-wider">ÓTICA <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-gold">LUZ</span></h1>
           </div>
-          <p className="text-[11px] sm:text-xs text-slate-300">Painel de Controle Comercial</p>
+          <p className="text-[11px] sm:text-xs text-slate-300 font-medium uppercase tracking-wider">Painel de Controle Comercial</p>
         </div>
 
+        {/* FORMULÁRIO OPERACIONAL */}
         <form onSubmit={handleLogin} className="p-5 sm:p-8 space-y-4">
+          
           {erro && (
-            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-lg">
-              ✕ {erro}
+            <div className="p-3 bg-rose-50 border border-rose-100 text-rose-700 text-xs font-semibold rounded-xl flex items-center space-x-2 animate-fadeIn">
+              <XCircle className="w-4 h-4 shrink-0" />
+              <span>{erro}</span>
             </div>
           )}
 
@@ -80,7 +95,7 @@ export default function Login({ setUsuarioLogado }) {
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><Mail className="w-4 h-4 text-slate-400" /></span>
               <input 
                 type="email" 
-                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white h-10 sm:h-auto"
+                className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white h-10 sm:h-auto"
                 placeholder="nome@oticaluz.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -95,7 +110,7 @@ export default function Login({ setUsuarioLogado }) {
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><Lock className="w-4 h-4 text-slate-400" /></span>
               <input 
                 type="password" 
-                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white h-10 sm:h-auto"
+                className="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white h-10 sm:h-auto"
                 placeholder="••••••••"
                 value={senha}
                 onChange={(e) => setSenha(e.target.value)}
@@ -112,7 +127,7 @@ export default function Login({ setUsuarioLogado }) {
             {carregando ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Autenticando...</span>
+                <span>Autenticando operadora...</span>
               </>
             ) : (
               <span>Entrar no Sistema</span>
@@ -125,11 +140,40 @@ export default function Login({ setUsuarioLogado }) {
               onClick={() => navigate('/usuarios')}
               className="text-[11px] sm:text-xs font-semibold text-royalBlue hover:text-royalBlue-light hover:underline transition-all p-1"
             >
-              Precisa cadastrar um operador? Gerenciar Equipe
+              Gerenciar quadro de funcionários ativos
             </button>
           </div>
         </form>
       </div>
+
+      {/* 🔔 MODAL DE ERRO OPERACIONAL DA INFRAESTRUTURA */}
+      {alertaConfig.aberto && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold animate-scaleIn">
+            <div className="p-5 space-y-4">
+              <div className="flex items-start space-x-3">
+                <div className="p-2 bg-rose-50 text-rose-600 rounded-xl shrink-0">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <h3 className="text-base font-bold text-slate-800 tracking-tight">{alertaConfig.titulo}</h3>
+                  <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">{alertaConfig.mensagem}</p>
+                </div>
+              </div>
+
+              <div className="flex pt-2 justify-end">
+                <button 
+                  type="button" 
+                  onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} 
+                  className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors"
+                >
+                  Entendido
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

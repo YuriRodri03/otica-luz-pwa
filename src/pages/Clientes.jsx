@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Clientes({ clientes, setClientes }) {
@@ -13,6 +13,9 @@ export default function Clientes({ clientes, setClientes }) {
   const [vendasAgrupadas, setVendasAgrupadas] = useState([])
   const [vendaAbertaId, setVendaAbertaId] = useState(null)
 
+  // Sub-modal para retificação de valor de venda (Substitui o window.prompt)
+  const [modalVendaEdicao, setModalVendaEdicao] = useState({ aberto: false, venda: null, novoValor: '' })
+
   // Estados do formulário de cadastro/edição de clientes
   const [nome, setNome] = useState('')
   const [cpf, setCpf] = useState('')
@@ -21,6 +24,17 @@ export default function Clientes({ clientes, setClientes }) {
   const [email, setEmail] = useState('')
   const [cidade, setCidade] = useState('')
   const [observacoes, setObservacoes] = useState('')
+
+  // ==========================================
+  // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
+  // ==========================================
+  const [alertaConfig, setAlertaConfig] = useState({
+    aberto: false,
+    tipo: 'aviso', // 'confirmacao' | 'erro' | 'sucesso'
+    titulo: '',
+    mensagem: '',
+    onConfirmar: null
+  })
 
   // ==========================================
   // CARREGAR DADOS DO BANCO TURSO
@@ -52,7 +66,7 @@ export default function Clientes({ clientes, setClientes }) {
   }, [])
 
   // ==========================================
-  // CONSTRUÇÃO DO HISTÓRICO UTILIZANDO AS TABELAS REAIS
+  // HISTÓRICO DE COMPRAS RELACIONAIS
   // ==========================================
   const carregarHistoricoVendasCliente = async (clienteId) => {
     try {
@@ -102,58 +116,82 @@ export default function Clientes({ clientes, setClientes }) {
   }, [clienteSelecionado])
 
   // ==========================================
-  // OPERAÇÕES: EDITAR, REMOVER E LIQUIDAR PARCELA
+  // FUNÇÕES DE MÁSCARA EM TEMPO REAL (MÁXIMO FIXADO)
   // ==========================================
-  const handleEditarVenda = async (venda) => {
-    const novoValor = window.prompt(`Digite o novo valor total líquido para esta venda (Valor Atual: R$ ${venda.totalVenda.toFixed(2)}):`, venda.totalVenda)
-    if (novoValor === null || isNaN(parseFloat(novoValor))) return
+  const aplicarMascaraCPF = (valor) => {
+    const limpo = valor.replace(/\D/g, '').slice(0, 11)
+    setCpf(limpo.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4"))
+  }
+
+  const aplicarMascaraTelefone = (valor) => {
+    const limpo = valor.replace(/\D/g, '').slice(0, 11)
+    if (limpo.length <= 10) {
+      setTelefone(limpo.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3"))
+    } else {
+      setTelefone(limpo.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3"))
+    }
+  }
+
+  // ==========================================
+  // OPERAÇÕES FINANCEIRAS COESAS (MODAIS EMBUTIDOS)
+  // ==========================================
+  const handleSalvarEditarVenda = async (e) => {
+    e.preventDefault()
+    const { venda, novoValor } = modalVendaEdicao
+    if (!novoValor || isNaN(parseFloat(novoValor))) return
 
     try {
       await turso.execute({
         sql: "UPDATE vendas SET total_liquido = ? WHERE id = ?",
         args: [parseFloat(novoValor), venda.id]
       })
-
       await carregarHistoricoVendasCliente(clienteSelecionado.id)
-      alert("Valor da venda retificado com sucesso!")
+      setModalVendaEdicao({ aberto: false, venda: null, novoValor: '' })
+      setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Sucesso', mensagem: 'Valor da venda retificado com sucesso!', onConfirmar: null })
     } catch (error) {
-      console.error("Erro ao editar venda:", error)
+      console.error(error)
     }
   }
 
-  const handleRemoverVenda = async (idVenda) => {
-    const confirmou = window.confirm("Tem certeza que deseja estornar esta venda?\nTodas as parcelas e registros vinculados serão removidos.")
-    if (!confirmou) return
-
-    try {
-      await turso.execute({ sql: "DELETE FROM parcelas_carne WHERE venda_id = ?", args: [idVenda] })
-      await turso.execute({ sql: "DELETE FROM vendas WHERE id = ?", args: [idVenda] })
-
-      await carregarHistoricoVendasCliente(clienteSelecionado.id)
-      alert("Venda estornada com sucesso!")
-    } catch (error) {
-      console.error("Erro ao deletar faturamento de venda:", error)
-    }
+  const handleRemoverVenda = (idVenda) => {
+    setAlertaConfig({
+      aberto: true,
+      tipo: 'confirmacao',
+      titulo: 'Estornar Venda',
+      mensagem: 'Tem certeza que deseja estornar esta venda? Todas as parcelas e históricos associados serão destruídos.',
+      onConfirmar: async () => {
+        try {
+          await turso.execute({ sql: "DELETE FROM parcelas_carne WHERE venda_id = ?", args: [idVenda] })
+          await turso.execute({ sql: "DELETE FROM vendas WHERE id = ?", args: [idVenda] })
+          await carregarHistoricoVendasCliente(clienteSelecionado.id)
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Estorno Concluído', mensagem: 'A venda foi removida do sistema.', onConfirmar: null })
+        } catch (error) {
+          console.error(error)
+        }
+      }
+    })
   }
 
-  const baixarParcelaDoCliente = async (parcela, produtosVenda) => {
-    const confirmou = window.confirm(`Confirmar recebimento da parcela ${parcela.numero}?`)
-    if (!confirmou) return
-
-    try {
-      await turso.execute({
-        sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?",
-        args: [parcela.id]
-      })
-      alert("Parcela baixada com sucesso no crediário!")
-      await carregarHistoricoVendasCliente(clienteSelecionado.id)
-    } catch (error) {
-      console.error("Erro ao liquidar parcela:", error)
-    }
+  const baixarParcelaDoCliente = (parcela) => {
+    setAlertaConfig({
+      aberto: true,
+      tipo: 'confirmacao',
+      titulo: 'Liquidar Crediário',
+      mensagem: `Confirmar o recebimento em caixa da parcela número ${parcela.numero}?`,
+      onConfirmar: async () => {
+        try {
+          await turso.execute({ sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?", args: [parcela.id] })
+          await carregarHistoricoVendasCliente(clienteSelecionado.id)
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Parcela Paga', mensagem: 'Recebimento homologado com sucesso.', onConfirmar: null })
+        } catch (error) {
+          console.error(error)
+        }
+      }
+    })
   }
 
   // ==========================================
-  // OPERAÇÕES DO FORMULÁRIO DE CLIENTES
+  // OPERAÇÕES CADASTRAS DO FORMULÁRIO CLIENTES
   // ==========================================
   const handleSalvar = async (e) => {
     e.preventDefault()
@@ -161,6 +199,11 @@ export default function Clientes({ clientes, setClientes }) {
     
     const cpfPuro = cpf.replace(/[^0-9]/g, '')
     const telefonePuro = telefone.replace(/[^0-9]/g, '')
+
+    if (cpfPuro.length !== 11) {
+      setAlertaConfig({ aberto: true, tipo: 'erro', titulo: 'Documento Inválido', mensagem: 'O CPF digitado precisa conter exatamente 11 dígitos.', onConfirmar: null })
+      return
+    }
 
     try {
       if (idEdicao) {
@@ -170,47 +213,51 @@ export default function Clientes({ clientes, setClientes }) {
         })
 
         if (checarCpf.rows.length > 0) {
-          alert("Atenção: Este CPF já pertence a outro cliente cadastrado!")
+          setAlertaConfig({ aberto: true, tipo: 'aviso', titulo: 'Duplicidade de CPF', mensagem: 'Este CPF já pertence a outro cliente cadastrado.', onConfirmar: null })
           return
         }
 
         await turso.execute({
           sql: `UPDATE clientes SET nome = ?, cpf = ?, data_nascimento = ?, telefone = ?, email = ?, cidade = ?, observacoes = ? WHERE id = ?`,
-          args: [nome, cpfPuro, dataNascimento, telefonePuro, email, cidade, observacoes, idEdicao]
+          args: [nome.trim(), cpfPuro, dataNascimento, telefonePuro, email.trim(), cidade.trim(), observacoes.trim(), idEdicao]
         })
       } else {
-        const checarCpfNovo = await turso.execute({
-          sql: "SELECT id FROM clientes WHERE cpf = ?",
-          args: [cpfPuro]
-        })
+        const checarCpfNovo = await turso.execute({ sql: "SELECT id FROM clientes WHERE cpf = ?", args: [cpfPuro] })
 
         if (checarCpfNovo.rows.length > 0) {
-          alert("Não foi possível cadastrar. Este CPF já está registrado no sistema!")
+          setAlertaConfig({ aberto: true, tipo: 'aviso', titulo: 'Cadastro Bloqueado', mensagem: 'Este CPF já está registrado na base de dados.', onConfirmar: null })
           return
         }
 
         await turso.execute({
           sql: `INSERT INTO clientes (nome, cpf, data_nascimento, telefone, email, cidade, observacoes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          args: [nome, cpfPuro, dataNascimento, telefonePuro, email, cidade, observacoes]
+          args: [nome.trim(), cpfPuro, dataNascimento, telefonePuro, email.trim(), cidade.trim(), observacoes.trim()]
         })
       }
       await carregarClientesDoBanco()
       limparFormulario()
       setAbaAtiva('lista')
     } catch (error) {
-      console.error("Erro ao salvar cadastro do cliente:", error)
-      alert("Houve um erro operacional ao tentar salvar os dados no Turso.")
+      console.error(error)
     }
   }
 
-  const handleExcluir = async (id, nomeCliente) => {
-    if (!window.confirm(`Excluir permanentemente o cadastro de "${nomeCliente}"?`)) return
-    try {
-      await turso.execute({ sql: "DELETE FROM clientes WHERE id = ?", args: [id] })
-      await carregarClientesDoBanco()
-    } catch (error) {
-      console.error(error)
-    }
+  const handleExcluir = (id, nomeCliente) => {
+    setAlertaConfig({
+      aberto: true,
+      tipo: 'confirmacao',
+      titulo: 'Remover Cliente',
+      mensagem: `Deseja deletar permanentemente a ficha cadastral de "${nomeCliente}"? Isso não removerá o histórico financeiro retroativo por integridade de auditoria.`,
+      onConfirmar: async () => {
+        try {
+          await turso.execute({ sql: "DELETE FROM clientes WHERE id = ?", args: [id] })
+          await carregarClientesDoBanco()
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Ficha Excluída', mensagem: 'Cliente removido da carteira ativa.', onConfirmar: null })
+        } catch (error) {
+          console.error(error)
+        }
+      }
+    })
   }
 
   const iniciarEdicao = (cliente) => {
@@ -258,7 +305,7 @@ export default function Clientes({ clientes, setClientes }) {
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-full overflow-hidden">
       
-      {/* CABEÇALHO RESPONSIVO */}
+      {/* CABEÇALHO */}
       <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-royalBlue">Módulo de Clientes</h2>
@@ -277,10 +324,10 @@ export default function Clientes({ clientes, setClientes }) {
       {/* SELEÇÃO DE ABAS */}
       {!clienteSelecionado && (
         <div className="flex space-x-2 border-b border-slate-200 mb-6 overflow-x-auto whitespace-nowrap scrollbar-none">
-          <button onClick={() => setAbaAtiva('lista')} className={`py-2 px-3 sm:px-4 font-semibold text-xs sm:text-sm border-b-2 transition-all ${abaAtiva === 'lista' ? 'border-gold text-royalBlue font-bold' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+          <button onClick={() => setAbaAtiva('lista')} className={`py-2 px-3 sm:px-4 font-semibold text-xs sm:text-sm border-b-2 transition-all ${abaAtiva === 'lista' ? 'border-gold text-royalBlue font-bold' : 'border-transparent text-slate-400'}`}>
             Carteira de Clientes ({clientesFiltradosEOrdenados.length})
           </button>
-          <button onClick={() => setAbaAtiva('cadastro')} className={`py-2 px-3 sm:px-4 font-semibold text-xs sm:text-sm border-b-2 transition-all ${abaAtiva === 'cadastro' ? 'border-gold text-royalBlue font-bold' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+          <button onClick={() => setAbaAtiva('cadastro')} className={`py-2 px-3 sm:px-4 font-semibold text-xs sm:text-sm border-b-2 transition-all ${abaAtiva === 'cadastro' ? 'border-gold text-royalBlue font-bold' : 'border-transparent text-slate-400'}`}>
             {idEdicao ? '⚡ Editando Cadastro' : 'Ficha de Novo Cadastro'}
           </button>
         </div>
@@ -297,31 +344,28 @@ export default function Clientes({ clientes, setClientes }) {
       {/* DETALHES DO CLIENTE SELECIONADO */}
       {clienteSelecionado && (
         <div className="space-y-6">
-          <button onClick={() => setClienteSelecionado(null)} className="flex items-center space-x-2 text-xs sm:text-sm font-semibold text-royalBlue hover:text-royalBlue-light transition-colors bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm w-full sm:w-auto justify-center sm:justify-start">
+          <button onClick={() => setClienteSelecionado(null)} className="flex items-center space-x-2 text-xs sm:text-sm font-semibold text-royalBlue hover:text-royalBlue-light transition-colors bg-white px-4 py-2 rounded-lg border border-slate-200 shadow-sm w-full sm:w-auto justify-center">
             <ArrowLeft className="w-4 h-4" />
             <span>Voltar para a Carteira</span>
           </button>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            {/* Card Lateral Cadastral */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 sm:p-6 h-fit">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 h-fit">
               <div className="flex items-center space-x-3 mb-4 pb-4 border-b border-slate-100">
-                <div className="p-2.5 bg-royalBlue/10 text-royalBlue rounded-lg shrink-0"><User className="w-5 h-5 sm:w-6 sm:h-6" /></div>
+                <div className="p-2.5 bg-royalBlue/10 text-royalBlue rounded-xl shrink-0"><User className="w-5 h-5" /></div>
                 <div className="min-w-0">
                   <h3 className="font-bold text-slate-800 text-sm sm:text-base truncate">{clienteSelecionado.nome}</h3>
                   <p className="text-[11px] text-slate-400">ID: #{clienteSelecionado.id}</p>
                 </div>
               </div>
               <div className="grid grid-cols-2 lg:grid-cols-1 gap-3 text-xs sm:text-sm">
-                <div><span className="text-[10px] sm:text-xs font-semibold text-slate-400 block uppercase">CPF</span><span className="text-slate-700 font-mono font-medium">{formatarCPF(clienteSelecionado.cpf)}</span></div>
-                <div><span className="text-[10px] sm:text-xs font-semibold text-slate-400 block uppercase">Nascimento</span><span className="text-slate-700 font-medium">{formatarDataBR(clienteSelecionado.dataNascimento)}</span></div>
-                <div><span className="text-[10px] sm:text-xs font-semibold text-slate-400 block uppercase">Telefone</span><span className="text-slate-700 font-medium">{formatarTelefone(clienteSelecionado.telefone) || 'Não informado'}</span></div>
-                <div><span className="text-[10px] sm:text-xs font-semibold text-slate-400 block uppercase">Cidade</span><span className="text-slate-700 font-medium">{clienteSelecionado.cidade || 'Não informada'}</span></div>
+                <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">CPF</span><span className="text-slate-700 font-mono font-medium">{formatarCPF(clienteSelecionado.cpf)}</span></div>
+                <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">Nascimento</span><span className="text-slate-700 font-medium">{formatarDataBR(clienteSelecionado.dataNascimento)}</span></div>
+                <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">Telefone</span><span className="text-slate-700 font-medium">{formatarTelefone(clienteSelecionado.telefone) || 'Não informado'}</span></div>
+                <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">Cidade</span><span className="text-slate-700 font-medium">{clienteSelecionado.cidade || 'Não informada'}</span></div>
               </div>
             </div>
 
-            {/* Painel Central das Vendas Acordeão */}
             <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-6">
               <div className="flex items-center space-x-2 mb-6 border-b border-slate-100 pb-3">
                 <ShoppingBag className="w-5 h-5 text-gold shrink-0" />
@@ -332,50 +376,27 @@ export default function Clientes({ clientes, setClientes }) {
                 <div className="space-y-4">
                   {vendasAgrupadas.map(venda => (
                     <div key={venda.id} className="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white">
-                      
-                      {/* BARRA DA VENDA MÃE */}
-                      <div className="p-4 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 transition-all select-none">
-                        <div 
-                          onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)}
-                          className="space-y-1.5 cursor-pointer w-full sm:flex-1 min-w-0"
-                        >
+                      <div className="p-4 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 select-none">
+                        <div onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)} className="space-y-1.5 cursor-pointer w-full sm:flex-1 min-w-0">
                           <p className="font-bold text-slate-700 text-xs sm:text-sm break-words">{venda.produtos}</p>
                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 font-medium">
                             <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" /> {formatarDataBR(venda.data)}</span>
                             <span>Tipo: <strong className="text-royalBlue">{venda.metodo}</strong></span>
                             {venda.entrada > 0 && <span className="text-emerald-600 font-bold">Entrad.: R$ {venda.entrada.toFixed(2)}</span>}
-                            {venda.desconto > 0 && <span className="text-rose-500 font-bold">Desc.: R$ {venda.desconto.toFixed(2)}</span>}
                           </div>
                         </div>
-
-                        <div className="flex items-center justify-between sm:justify-end w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 gap-3 shrink-0">
+                        <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 shrink-0">
                           <p className="font-extrabold text-royalBlue text-sm sm:text-base">R$ {venda.totalVenda.toFixed(2)}</p>
                           <div className="flex items-center space-x-1.5">
-                            <button 
-                              onClick={() => handleEditarVenda(venda)}
-                              className="p-1.5 bg-white text-slate-500 hover:bg-royalBlue hover:text-white rounded-md border border-slate-200 transition-colors"
-                              title="Retificar Valor Total"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
-                            <button 
-                              onClick={() => handleRemoverVenda(venda.id)}
-                              className="p-1.5 bg-white text-rose-500 hover:bg-rose-600 hover:text-white rounded-md border border-slate-200 transition-colors"
-                              title="Estornar Venda Completa"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                            <div 
-                              onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)}
-                              className="cursor-pointer pl-1 px-2 py-1 hover:bg-slate-200/50 rounded-md"
-                            >
+                            <button onClick={() => setModalVendaEdicao({ aberto: true, venda, novoValor: venda.totalVenda.toString() })} className="p-1.5 bg-white text-slate-500 hover:bg-royalBlue hover:text-white rounded-md border border-slate-200 transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => handleRemoverVenda(venda.id)} className="p-1.5 bg-white text-rose-500 hover:bg-rose-600 hover:text-white rounded-md border border-slate-200 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                            <div onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)} className="cursor-pointer px-2 py-1 hover:bg-slate-200/50 rounded-md">
                               {vendaAbertaId === venda.id ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      {/* CONTEÚDO EXPANSÍVEL */}
                       {vendaAbertaId === venda.id && (
                         <div className="p-3 sm:p-4 border-t border-slate-100 bg-white space-y-3">
                           <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider">Detalhamento do Recebimento / Carnê</h4>
@@ -390,17 +411,9 @@ export default function Clientes({ clientes, setClientes }) {
                                   <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-dashed border-slate-100">
                                     <p className="font-bold text-slate-800">R$ {parseFloat(parc.valor).toFixed(2)}</p>
                                     <div className="flex items-center space-x-2">
-                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                        parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' :
-                                        parc.status === 'Atrasado' ? 'bg-rose-50 text-rose-700 font-extrabold' : 'bg-amber-50 text-amber-700'
-                                      }`}>{parc.status}</span>
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{parc.status}</span>
                                       {parc.status !== 'Pago' ? (
-                                        <button
-                                          onClick={() => baixarParcelaDoCliente(parc, venda.produtos)}
-                                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] sm:text-[11px] px-2.5 py-1 rounded transition-colors shadow-sm"
-                                        >
-                                          Liquidar
-                                        </button>
+                                        <button onClick={() => baixarParcelaDoCliente(parc)} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1 rounded transition-colors shadow-sm">Liquidar</button>
                                       ) : (
                                         <span className="text-[11px] font-medium text-slate-400 italic bg-slate-100 px-2 py-0.5 rounded">Baixada</span>
                                       )}
@@ -410,38 +423,27 @@ export default function Clientes({ clientes, setClientes }) {
                               ))}
                             </div>
                           ) : (
-                            <p className="text-xs text-emerald-600 font-semibold bg-emerald-50 p-2.5 rounded border border-emerald-100 block w-full">
-                              ✓ Venda à vista liquidada integralmente no momento da compra.
-                            </p>
+                            <p className="text-xs text-emerald-600 font-semibold bg-emerald-50 p-2.5 rounded border border-emerald-100 block w-full">✓ Venda à vista liquidada integralmente.</p>
                           )}
                         </div>
                       )}
-
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-12 text-slate-400 text-xs sm:text-sm border-2 border-dashed border-slate-100 rounded-xl">
-                  Nenhum faturamento estruturado associado a este cliente.
-                </div>
+                <div className="text-center py-12 text-slate-400 text-xs sm:text-sm border-2 border-dashed border-slate-100 rounded-xl">Nenhum faturamento estruturado associado a este cliente.</div>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* LISTAGEM PRINCIPAL */}
+      {/* LISTAGEM DE CARTEIRA */}
       {abaAtiva === 'lista' && !clienteSelecionado && !carregando && (
         <div className="space-y-4">
           <div className="relative max-w-md w-full">
             <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><Search className="w-4 h-4 text-slate-400" /></span>
-            <input
-              type="text"
-              placeholder="Pesquisar cliente por nome ou CPF..."
-              className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm"
-              value={termoBusca}
-              onChange={(e) => setTermoBusca(e.target.value)}
-            />
+            <input type="text" placeholder="Pesquisar cliente por nome ou CPF..." className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm" value={termoBusca} onChange={(e) => setTermoBusca(e.target.value)} />
           </div>
 
           <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-200 w-full">
@@ -465,16 +467,14 @@ export default function Clientes({ clientes, setClientes }) {
                         <td className="p-3 sm:p-4 text-slate-500">{formatarDataBR(cliente.dataNascimento)}</td>
                         <td className="p-3 sm:p-4 text-slate-500">{formatarTelefone(cliente.telefone) || 'Não informado'}</td>
                         <td className="p-3 sm:p-4 flex items-center justify-center space-x-1.5">
-                          <button onClick={() => setClienteSelecionado(cliente)} className="bg-gold text-wood-dark hover:bg-gold-dark font-bold text-[11px] px-2.5 py-1.5 rounded transition-colors shadow-sm">
-                            Histórico
-                          </button>
+                          <button onClick={() => setClienteSelecionado(cliente)} className="bg-gold text-wood-dark hover:bg-gold-dark font-bold text-[11px] px-2.5 py-1.5 rounded transition-colors shadow-sm">Histórico</button>
                           <button onClick={() => { iniciarEdicao(cliente); }} className="p-1.5 bg-slate-100 text-slate-600 hover:bg-royalBlue hover:text-white rounded-lg transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
                           <button onClick={() => handleExcluir(cliente.id, cliente.nome)} className="p-1.5 bg-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                         </td>
                       </tr>
                     ))
                   ) : (
-                    <tr><td colSpan="5" className="text-center p-8 text-xs sm:text-sm text-slate-400">Nenhum cliente correspondente encontrado.</td></tr>
+                    <tr><td colSpan="5" className="text-center p-8 text-slate-400">Nenhum cliente correspondente encontrado.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -483,7 +483,7 @@ export default function Clientes({ clientes, setClientes }) {
         </div>
       )}
 
-      {/* FORMULÁRIO COMPLETO */}
+      {/* FORMULÁRIO DE CADASTRO COM MÁSCARAS FIXADAS */}
       {abaAtiva === 'cadastro' && !clienteSelecionado && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
           <div className="bg-royalBlue p-4 text-white font-bold border-b-4 border-gold text-xs sm:text-sm">
@@ -496,8 +496,8 @@ export default function Clientes({ clientes, setClientes }) {
                 <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue" value={nome} onChange={(e) => setNome(e.target.value)} required />
               </div>
               <div>
-                <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">CPF</label>
-                <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue" placeholder="000.000.000-00" value={cpf} onChange={(e) => setCpf(e.target.value)} required />
+                <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">CPF (11 números)</label>
+                <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue font-mono" placeholder="000.000.000-00" value={cpf} onChange={(e) => aplicarMascaraCPF(e.target.value)} required />
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -506,8 +506,8 @@ export default function Clientes({ clientes, setClientes }) {
                 <input type="date" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm text-slate-700 focus:outline-none" value={dataNascimento} onChange={(e) => setDataNascimento(e.target.value)} required />
               </div>
               <div>
-                <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Telefone</label>
-                <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none" placeholder="(88) 99999-0000" value={telefone} onChange={(e) => setTelefone(e.target.value)} />
+                <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Telefone (DDD + Número)</label>
+                <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none font-mono" placeholder="(88) 99999-0000" value={telefone} onChange={(e) => aplicarMascaraTelefone(e.target.value)} />
               </div>
               <div className="sm:col-span-2 lg:col-span-1">
                 <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">E-mail</label>
@@ -529,6 +529,63 @@ export default function Clientes({ clientes, setClientes }) {
           </form>
         </div>
       )}
+
+      {/* 💻 SUB-MODAL EXCLUSIVO PARA RETIFICAÇÃO DE VALOR DE VENDA (SUBSTITUTO DO PROMPT) */}
+      {modalVendaEdicao.aberto && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-3">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
+            <div className="bg-royalBlue p-4 text-white font-bold flex justify-between items-center">
+              <span className="text-xs sm:text-sm">Retificar Valor da Venda</span>
+              <button onClick={() => setModalVendaEdicao({ aberto: false, venda: null, novoValor: '' })} className="text-slate-300 hover:text-white">✕</button>
+            </div>
+            <form onSubmit={handleSalvarEditarVenda} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Novo Total Líquido (R$)</label>
+                <input type="number" step="0.01" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" value={modalVendaEdicao.novoValor} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, novoValor: e.target.value }))} required />
+              </div>
+              <div className="flex space-x-2 justify-end">
+                <button type="button" onClick={() => setModalVendaEdicao({ aberto: false, venda: null, novoValor: '' })} className="bg-slate-100 px-4 py-2 rounded-lg text-xs font-semibold text-slate-700">Cancelar</button>
+                <button type="submit" className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs font-semibold border-b-2 border-gold flex items-center space-x-1"><Save className="w-3.5 h-3.5" /><span>Salvar</span></button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 🔔 MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO DA ÓTICA LUZ */}
+      {alertaConfig.aberto && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
+            <div className="p-5 space-y-4">
+              <div className="flex items-start space-x-3">
+                <div className={`p-2 rounded-xl shrink-0 ${
+                  alertaConfig.tipo === 'confirmacao' || alertaConfig.tipo === 'aviso'
+                    ? 'bg-amber-50 text-amber-600' 
+                    : alertaConfig.tipo === 'sucesso' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+                }`}>
+                  {alertaConfig.tipo === 'erro' ? <XCircle className="w-6 h-6" /> : alertaConfig.tipo === 'sucesso' ? <CheckCircle className="w-6 h-6" /> : <AlertTriangle className="w-6 h-6" />}
+                </div>
+                <div className="space-y-1 min-w-0">
+                  <h3 className="text-base font-bold text-slate-800 tracking-tight">{alertaConfig.titulo}</h3>
+                  <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">{alertaConfig.mensagem}</p>
+                </div>
+              </div>
+
+              <div className="flex space-x-2 pt-2 justify-end">
+                {alertaConfig.tipo === 'confirmacao' ? (
+                  <>
+                    <button type="button" onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold">Não, voltar</button>
+                    <button type="button" onClick={alertaConfig.onConfirmar} className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm">Sim, executar</button>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold">Entendido</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
