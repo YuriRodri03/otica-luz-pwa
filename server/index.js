@@ -51,12 +51,22 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
     return res.status(400).json({ error: 'WhatsApp não está ativo para desconectar.' });
   }
   try {
+    statusConexao = 'Desconectando...';
     await whatsappClient.logout();
     statusConexao = 'Desconectado';
     qrCodeBase64 = null;
     whatsappClient = null;
+    
     res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
+
+    // 🔥 Força a reinicialização automática em background para gerar um novo QR Code imediatamente
+    setTimeout(() => {
+      console.log('🔄 Reiniciando motor após logout manual para disponibilizar novo QR Code...');
+      inicializarWhatsApp();
+    }, 3000);
+
   } catch (error) {
+    statusConexao = 'Erro ao desconectar';
     res.status(500).json({ error: error.message });
   }
 });
