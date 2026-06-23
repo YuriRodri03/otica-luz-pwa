@@ -88,15 +88,15 @@ app.listen(PORT, () => {
 // 4. INICIALIZAÇÃO DO WHATSAPP (BAILEYS SEM NAVEGADOR)
 // ==========================================
 async function inicializarWhatsApp() {
-  // Define o diretório dos tokens de autenticação (leve e sem arquivos de cache do Chrome)
-  const { state, saveCreds } = await useMultiFileAuthState(
-    path.resolve('/opt/render/project/src/server/tokens/otica-luz-session')
-  );
+  const tokenPath = path.resolve('/opt/render/project/src/server/tokens/otica-luz-session');
+  
+  // Define o diretório dos tokens de autenticação
+  const { state, saveCreds, clearState } = await useMultiFileAuthState(tokenPath);
 
   try {
     whatsappClient = makeWASocket({
       auth: state,
-      printQRInTerminal: false, // Desativa logs pesados
+      printQRInTerminal: false, 
       defaultQueryTimeoutMs: undefined,
     });
 
@@ -107,7 +107,6 @@ async function inicializarWhatsApp() {
       if (qr) {
         statusConexao = 'Aguardando Leitura do QR Code';
         try {
-          // Transforma a string do QR Code em Base64 DataURL compatível com o seu front-end
           qrCodeBase64 = await QRCode.toDataURL(qr);
         } catch (err) {
           console.error('Erro ao gerar string do QR Code:', err);
@@ -115,21 +114,39 @@ async function inicializarWhatsApp() {
       }
 
       if (connection === 'close') {
-        const deveReiniciar = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-        console.log('Conexão fechada devido a:', lastDisconnect?.error, '. Reiniciando de forma leve?', deveReiniciar);
+        const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+        
+        // 🔥 Se for deslogado (401), limpa os arquivos corrompidos para liberar o QR Code no próximo boot
+        const foiDeslogado = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+        
+        console.log(`Conexão fechada. Código: ${statusCode}. Foi deslogado? ${foiDeslogado}`);
         
         statusConexao = 'Desconectado';
         qrCodeBase64 = null;
 
-        if (deveReiniciar) {
-          inicializarWhatsApp(); // Tenta reconexão automática se não foi um logout manual
+        if (foiDeslogado) {
+          console.log('🧹 Limpando credenciais antigas de forma segura...');
+          try {
+            await clearState(); // Remove os arquivos fisicamente usando a função nativa do Baileys
+          } catch (e) {
+            console.log('Erro ao limpar diretório:', e.message);
+          }
+          
+          // 🔥 Lança o boot limpo em seguida para gerar o QR Code na hora
+          setTimeout(() => {
+            console.log('🔄 Inicializando nova instância limpa para gerar o QR Code...');
+            inicializarWhatsApp();
+          }, 2000);
+        } else {
+          // Se caiu por oscilação de rede comum, apenas tenta reconectar de forma leve
+          inicializarWhatsApp();
         }
+        
       } else if (connection === 'open') {
         statusConexao = 'Conectado';
         qrCodeBase64 = null;
         console.log('✅ WhatsApp conectado com sucesso via Baileys!');
 
-        // Executa rotinas automáticas após estabilizar a sincronização inicial
         setTimeout(() => {
           verificarAniversariantesDoDia();
           verificarPosVendaTrintaDias();
@@ -137,7 +154,6 @@ async function inicializarWhatsApp() {
       }
     });
 
-    // Necessário para salvar as chaves de segurança conforme a sessão avança
     whatsappClient.ev.on('creds.update', saveCreds);
 
   } catch (error) {
