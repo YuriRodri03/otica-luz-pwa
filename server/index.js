@@ -68,16 +68,15 @@ app.listen(PORT, () => {
   
   statusConexao = 'Iniciando motor...';
 
-  // 🔥 Dá um delay de 5 segundos para o Render processar que o servidor subiu com sucesso.
-  // Isso evita o erro 502 (Bad Gateway) e o crash por concorrência de memória no boot do Chromium.
+  // Delay estratégico de 5 segundos para o Render registrar o status saudável
   setTimeout(() => {
-    console.log('🤖 Despachando inicialização em segundo plano do Wppconnect...');
+    console.log('🤖 Despachando inicialização estável em segundo plano do Wppconnect...');
     inicializarWhatsApp();
   }, 5000);
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (OTIMIZADA PARA O RENDER)
+// 4. INICIALIZAÇÃO DO WHATSAPP (BLINDAGEM EXTREMA DE RAM)
 // ==========================================
 function inicializarWhatsApp() {
   wppconnect
@@ -97,19 +96,26 @@ function inicializarWhatsApp() {
       debug: false,
       logQR: false,
       autoClose: 0,
-      // 🔥 CONFIGURAÇÕES CRUCIAIS PARA PREVENIR CRASH DE MEMÓRIA (RAM) NO RENDER:
+      
+      // 🔥 NOVAS TRAVAS DE SEGURANÇA CONTRA OVERFLOW DE MEMÓRIA:
+      disableWelcome: true,     // Desativa mensagens pesadas de boas-vindas no console do Wppconnect
+      updatesLog: false,         // Desativa o logger de atualizações automáticas que consome memória
+      disableAutoUpdate: true,   // Impede o download em background de novas versões do core (consome muita RAM)
+
       puppeteerOptions: {
-        userDataDir: '/opt/render/project/src/server/tokens/otica-luz-session', // Pasta persistente
+        userDataDir: '/opt/render/project/src/server/tokens/otica-luz-session',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', // Evita estouro de RAM compartilhada
+          '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--single-process', // Força o Chromium a abrir apenas um processo (economia extrema)
-          '--disable-gpu', // Desativa processamento gráfico
-          '--js-flags="--max-old-space-size=150"' // 🔥 Limita o Javascript do Chromium a usar no máximo 150MB de RAM
+          '--single-process',          // Restringe o Chromium a rodar em uma única thread leve
+          '--disable-gpu',
+          '--disable-extensions',       // Bloqueia qualquer extensão interna do Chrome
+          '--disable-component-update', // Impede atualizações de componentes em tempo de execução
+          '--js-flags="--max-old-space-size=120 --gc-interval=100"' // 🔥 Limita o JS a 120MB e força a limpeza de lixo da memória (Garbage Collector) a cada 100ms
         ]
       }
     })
@@ -119,7 +125,6 @@ function inicializarWhatsApp() {
       qrCodeBase64 = null; 
       console.log('✅ WhatsApp conectado com sucesso!');
 
-      // Executa as rotinas diárias normais após 30 segundos
       setTimeout(() => {
         verificarAniversariantesDoDia();
         verificarPosVendaTrintaDias();
@@ -164,7 +169,7 @@ async function verificarAniversariantesDoDia() {
     });
     
     if (resultado.rows.length === 0) {
-      print('📭 Nenhum aniversariante encontrado hoje.');
+      console.log('📭 Nenhum aniversariante encontrado hoje.');
       ultimaDataEnvio = hojeDataCompleta;
       return;
     }
