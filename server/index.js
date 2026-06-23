@@ -1,8 +1,10 @@
 import express from 'express';
 import cors from 'cors'; 
 import { createClient } from '@libsql/client';
-import * as wppconnect from '@wppconnect-team/wppconnect';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import QRCode from 'qrcode';
 import dotenv from 'dotenv';
+import path from 'path';
 
 dotenv.config();
 
@@ -13,7 +15,7 @@ const app = express();
 // ==========================================
 app.use(express.json());
 app.use(cors({
-  origin: 'https://otica-luz.vercel.app', // Permite estritamente o seu front-end da Vercel
+  origin: 'https://otica-luz.vercel.app', 
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -28,7 +30,7 @@ const turso = createClient({
 });
 
 let ultimaDataPosVenda = null;
-let whatsappClient = null;
+let whatsappClient = null; // Guardará a instância ativa do socket do Baileys
 let ultimaDataEnvio = null; 
 let statusConexao = 'Iniciando...';
 let qrCodeBase64 = null;
@@ -51,6 +53,7 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
   try {
     await whatsappClient.logout();
     statusConexao = 'Desconectado';
+    qrCodeBase64 = null;
     whatsappClient = null;
     res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
   } catch (error) {
@@ -58,100 +61,107 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
   }
 });
 
-app.get('/', (req, res) => res.send('Servidor Ótica Luz Ativo!'));
+app.get('/', (req, res) => res.send('Servidor Ótica Luz Ativo com Baileys!'));
 
 // ==========================================
-// 3. INICIALIZAÇÃO DO SERVIDOR HTTP (COM ATRASO SEGURO)
+// 3. INICIALIZAÇÃO DO SERVIDOR HTTP
 // ==========================================
 app.listen(PORT, () => {
   console.log(`🚀 Servidor HTTP rodando na porta ${PORT}`);
-  
   statusConexao = 'Iniciando motor...';
-
-  // Delay estratégico de 5 segundos para o Render registrar o status saudável
-  setTimeout(() => {
-    console.log('🤖 Despachando inicialização estável em segundo plano do Wppconnect...');
-    inicializarWhatsApp();
-  }, 5000);
+  
+  // Inicialização imediata em background (Sem Puppeteer, não há risco de travar o HTTP server)
+  inicializarWhatsApp();
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (BLINDAGEM EXTREMA DE RAM)
+// 4. INICIALIZAÇÃO DO WHATSAPP (BAILEYS SEM NAVEGADOR)
 // ==========================================
-function inicializarWhatsApp() {
-  wppconnect
-    .create({
-      session: 'otica-luz-session',
-      catchQR: (base64Qr, asciiQR, attempts, urlCode) => {
-        statusConexao = 'Aguardando Leitura do QR Code';
-        qrCodeBase64 = base64Qr; 
-      },
-      statusFind: (statusSession, session) => {
-        statusConexao = statusSession;
-        console.log('Status da Sessão:', statusSession);
-      },
-      headless: true,
-      devtools: false,
-      useChrome: false,
-      debug: false,
-      logQR: false,
-      autoClose: 0,
-      
-      // 🔥 NOVAS TRAVAS DE SEGURANÇA CONTRA OVERFLOW DE MEMÓRIA:
-      disableWelcome: true,     // Desativa mensagens pesadas de boas-vindas no console do Wppconnect
-      updatesLog: false,         // Desativa o logger de atualizações automáticas que consome memória
-      disableAutoUpdate: true,   // Impede o download em background de novas versões do core (consome muita RAM)
+async function inicializarWhatsApp() {
+  // Define o diretório dos tokens de autenticação (leve e sem arquivos de cache do Chrome)
+  const { state, saveCreds } = await useMultiFileAuthState(
+    path.resolve('/opt/render/project/src/server/tokens/otica-luz-session')
+  );
 
-      puppeteerOptions: {
-        userDataDir: '/opt/render/project/src/server/tokens/otica-luz-session',
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--single-process',          // Restringe o Chromium a rodar em uma única thread leve
-          '--disable-gpu',
-          '--disable-extensions',       // Bloqueia qualquer extensão interna do Chrome
-          '--disable-component-update', // Impede atualizações de componentes em tempo de execução
-          '--js-flags="--max-old-space-size=120 --gc-interval=100"' // 🔥 Limita o JS a 120MB e força a limpeza de lixo da memória (Garbage Collector) a cada 100ms
-        ]
-      }
-    })
-    .then((client) => {
-      whatsappClient = client;
-      statusConexao = 'Conectado';
-      qrCodeBase64 = null; 
-      console.log('✅ WhatsApp conectado com sucesso!');
-
-      setTimeout(() => {
-        verificarAniversariantesDoDia();
-        verificarPosVendaTrintaDias();
-      }, 30000);
-    })
-    .catch((error) => {
-      statusConexao = 'Erro ao conectar';
-      console.error('Erro ao iniciar o WhatsApp:', error);
+  try {
+    whatsappClient = makeWASocket({
+      auth: state,
+      printQRInTerminal: false, // Desativa logs pesados
+      defaultQueryTimeoutMs: undefined,
     });
+
+    // Ouvinte de atualizações de conexão e geração de QR Code
+    whatsappClient.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        statusConexao = 'Aguardando Leitura do QR Code';
+        try {
+          // Transforma a string do QR Code em Base64 DataURL compatível com o seu front-end
+          qrCodeBase64 = await QRCode.toDataURL(qr);
+        } catch (err) {
+          console.error('Erro ao gerar string do QR Code:', err);
+        }
+      }
+
+      if (connection === 'close') {
+        const deveReiniciar = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+        console.log('Conexão fechada devido a:', lastDisconnect?.error, '. Reiniciando de forma leve?', deveReiniciar);
+        
+        statusConexao = 'Desconectado';
+        qrCodeBase64 = null;
+
+        if (deveReiniciar) {
+          inicializarWhatsApp(); // Tenta reconexão automática se não foi um logout manual
+        }
+      } else if (connection === 'open') {
+        statusConexao = 'Conectado';
+        qrCodeBase64 = null;
+        console.log('✅ WhatsApp conectado com sucesso via Baileys!');
+
+        // Executa rotinas automáticas após estabilizar a sincronização inicial
+        setTimeout(() => {
+          verificarAniversariantesDoDia();
+          verificarPosVendaTrintaDias();
+        }, 15000);
+      }
+    });
+
+    // Necessário para salvar as chaves de segurança conforme a sessão avança
+    whatsappClient.ev.on('creds.update', saveCreds);
+
+  } catch (error) {
+    statusConexao = 'Erro ao conectar';
+    console.error('Erro crítico ao iniciar Baileys:', error);
+  }
+}
+
+// Helper utilitário para formatar e enviar texto de forma limpa pelo Baileys
+async function enviarMensagemTexto(numeroComJid, texto) {
+  if (!whatsappClient) throw new Error('Client Baileys não inicializado');
+  
+  // No Baileys, o envio de texto puro segue essa estrutura simplificada
+  await whatsappClient.sendMessage(numeroComJid, { text: texto });
+}
+
+// Helper leve para verificar se o número possui WhatsApp ativo no ecossistema
+async function validarNumeroWhatsApp(numeroPuro) {
+  try {
+    const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
+    if (result && result.exists) {
+      return result.jid;
+    }
+    return `${numeroPuro}@s.whatsapp.net`;
+  } catch (e) {
+    return `${numeroPuro}@s.whatsapp.net`;
+  }
 }
 
 // ==========================================
-// 5. ROTINA AUTOMÁTICA DE DISPAROS (CORRIGIDA)
+// 5. ROTINA AUTOMÁTICA DE DISPAROS
 // ==========================================
 async function verificarAniversariantesDoDia() {
-  if (!whatsappClient) return;
-
-  try {
-    const estaConectado = await whatsappClient.isConnected();
-    if (!estaConectado) {
-      console.log('⏳ Adiando checagem: O WhatsApp está autenticado, mas a interface Web ainda está carregando chats...');
-      return;
-    }
-  } catch (err) {
-    console.log('⏳ Adiando checagem: Aguardando inicialização completa dos scripts do WhatsApp Web.');
-    return;
-  }
+  if (!whatsappClient || statusConexao !== 'Conectado') return;
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
   if (ultimaDataEnvio === hojeDataCompleta) return;
@@ -187,29 +197,27 @@ async function verificarAniversariantesDoDia() {
       let envioSucesso = false;
 
       try {
-        const infoNumero = await whatsappClient.checkNumberStatus(`${numeroPuro}@c.us`);
-        const destinatarioValido = infoNumero?.id?._serialized || `${numeroPuro}@c.us`;
-        
-        console.log(`📬 [Tentativa 1] Enviando para ID: ${destinatarioValido}`);
-        await whatsappClient.sendText(destinatarioValido, message); 
+        const jidValido = await validarNumeroWhatsApp(numeroPuro);
+        console.log(`📬 [Tentativa 1] Enviando para JID: ${jidValido}`);
+        await enviarMensagemTexto(jidValido, message); 
         console.log(`✅ [Sucesso] Parabéns enviado na primeira tentativa para: ${nome}`);
         envioSucesso = true;
       } catch (erroPrimeiraTentativa) {
-        console.log(`⚠️ [Falha 1] Erro na primeira tentativa (${erroPrimeiraTentativa.message}).`);
+        console.log(`⚠️ [Falha 1] Erro na primeira tentativa: ${erroPrimeiraTentativa.message}`);
       }
 
       if (!envioSucesso && numeroPuro.length === 13) {
-        console.log(`🔄 Tentando Fallback cortando o nono dígito para o número de 13 dígitos...`);
+        console.log(`🔄 Tentando Fallback cortando o nono dígito...`);
         try {
           const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          const destinatarioFallback = `${numeroSemNonoDigito}@c.us`;
+          const jidFallback = await validarNumeroWhatsApp(numeroSemNonoDigito);
           
-          console.log(`📬 [Tentativa 2] Enviando para ID corrigido: ${destinatarioFallback}`);
-          await whatsappClient.sendText(destinatarioFallback, message);
+          console.log(`📬 [Tentativa 2] Enviando para JID corrigido: ${jidFallback}`);
+          await enviarMensagemTexto(jidFallback, message);
           console.log(`✅ [Sucesso] Parabéns enviado via Fallback para: ${nome}`);
           envioSucesso = true;
         } catch (erroSegundaTentativa) {
-          console.error(`❌ [Falha no Fallback] Não foi possível enviar cortando o 9:`, erroSegundaTentativa.message);
+          console.error(`❌ [Falha no Fallback] Não foi possível enviar:`, erroSegundaTentativa.message);
         }
       }
 
@@ -229,14 +237,7 @@ async function verificarAniversariantesDoDia() {
 // 6. ROTINA AUTOMÁTICA DE PÓS-VENDA (30 DIAS)
 // ==========================================
 async function verificarPosVendaTrintaDias() {
-  if (!whatsappClient) return;
-
-  try {
-    const estaConectado = await whatsappClient.isConnected();
-    if (!estaConectado) return;
-  } catch (err) {
-    return;
-  }
+  if (!whatsappClient || statusConexao !== 'Conectado') return;
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
   if (ultimaDataPosVenda === hojeDataCompleta) return;
@@ -268,16 +269,14 @@ async function verificarPosVendaTrintaDias() {
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
-      const message = `Olá, ${nome}! Tudo bem? 😊\n\nHá cerca de um mês você esteve aqui na *Ótica Luz* e levou seu(s) product(s): *${produtos}*.\n\nPassamos para saber como está sendo a sua experiência! Os óculos estão confortáveis? Precisando de qualquer ajuste na armação ou limpeza das lentes, lembre-se que você tem assistência gratuita aqui na loja. 🕶️✨\n\nSua satisfação é muito importante para nós!`;
+      const message = `Olá, ${nome}! Tudo bem? 😊\n\nHá cerca de um mês você esteve aqui na *Ótica Luz* e levou seu(s) produto(s): *${produtos}*.\n\nPassamos para saber como está sendo a sua experiência! Os óculos estão confortáveis? Precisando de qualquer ajuste na armação ou limpeza das lentes, lembre-se que você tem assistência gratuita aqui na loja. 🕶️✨\n\nSua satisfação é muito importante para nós!`;
       
       console.log(`🚀 Enviando pós-venda para ${nome} (${numeroPuro})`);
       let envioSucesso = false;
 
       try {
-        const infoNumero = await whatsappClient.checkNumberStatus(`${numeroPuro}@c.us`);
-        const destinatarioValido = infoNumero?.id?._serialized || `${numeroPuro}@c.us`;
-        
-        await whatsappClient.sendText(destinatarioValido, message); 
+        const jidValido = await validarNumeroWhatsApp(numeroPuro);
+        await enviarMensagemTexto(jidValido, message); 
         console.log(`✅ [Pós-Venda] Mensagem entregue para: ${nome}`);
         envioSucesso = true;
       } catch (err) {
@@ -287,7 +286,8 @@ async function verificarPosVendaTrintaDias() {
       if (!envioSucesso && numeroPuro.length === 13) {
         try {
           const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          await whatsappClient.sendText(`${numeroSemNonoDigito}@c.us`, message);
+          const jidFallback = await validarNumeroWhatsApp(numeroSemNonoDigito);
+          await enviarMensagemTexto(jidFallback, message);
           console.log(`✅ [Pós-Venda] Mensagem entregue via Fallback para: ${nome}`);
           envioSucesso = true;
         } catch (errFallback) {
@@ -304,7 +304,7 @@ async function verificarPosVendaTrintaDias() {
   }
 }
 
-// Verifica a cada 1 hora se mudou o dia para rodar novamente as rotinas
+// Verifica de hora em hora se virou o dia para disparar novamente
 setInterval(() => {
   verificarAniversariantesDoDia();
   verificarPosVendaTrintaDias();
