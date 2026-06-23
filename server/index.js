@@ -22,6 +22,7 @@ const turso = createClient({
   authToken: process.env.TURSO_AUTH_TOKEN,
   disableMigrations: true, 
 });
+
 let ultimaDataPosVenda = null;
 let whatsappClient = null;
 let ultimaDataEnvio = null; 
@@ -86,18 +87,19 @@ function inicializarWhatsApp() {
       debug: false,
       logQR: false,
       autoClose: 0,
-      // 🔥 CONFIGURAÇÕES CRUCIAIS PARA PREVENIR CRASH NO RENDER:
+      // 🔥 CONFIGURAÇÕES CRUCIAIS PARA PREVENIR CRASH DE MEMÓRIA (RAM) NO RENDER:
       puppeteerOptions: {
-        userDataDir: '/opt/render/project/src/server/tokens/otica-luz-session', // Direciona os tokens para a pasta persistente local
+        userDataDir: '/opt/render/project/src/server/tokens/otica-luz-session', // Pasta persistente
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', // Força o Chrome a usar disco temporário em vez de RAM compartilhada
+          '--disable-dev-shm-usage', // Evita estouro de RAM compartilhada
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--single-process', // Força o navegador a rodar em uma única thread (economia extrema de RAM)
-          '--disable-gpu' // Desativa renderização de gráficos pesados por hardware
+          '--single-process', // Força o Chromium a abrir apenas um processo (economia extrema)
+          '--disable-gpu', // Desativa processamento gráfico
+          '--js-flags="--max-old-space-size=150"' // 🔥 Limita o Javascript do Chromium a usar no máximo 150MB de RAM
         ]
       }
     })
@@ -106,6 +108,8 @@ function inicializarWhatsApp() {
       statusConexao = 'Conectado';
       qrCodeBase64 = null; 
       console.log('✅ WhatsApp conectado com sucesso!');
+
+      // Executa as rotinas diárias normais após 30 segundos
       setTimeout(() => {
         verificarAniversariantesDoDia();
         verificarPosVendaTrintaDias();
@@ -123,7 +127,6 @@ function inicializarWhatsApp() {
 async function verificarAniversariantesDoDia() {
   if (!whatsappClient) return;
 
-  // 🔥 ESCUDO DE CARREGAMENTO: Verifica se a interface interna do WhatsApp já está de fato pronta para enviar mensagens
   try {
     const estaConectado = await whatsappClient.isConnected();
     if (!estaConectado) {
@@ -163,28 +166,23 @@ async function verificarAniversariantesDoDia() {
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
-      const mensagem = `Olá, ${nome}! 🎉\n\nNós da *Ótica Luz* passamos para te desejar um feliz aniversário! 🎂✨\n\nQue o seu novo ciclo seja iluminado, cheio de saúde e muitas conquistas. Como presente, traga esta mensagem até a ótica durante o seu mês para retirar um brinde exclusivo! 🕶️💝`;
+      const message = `Olá, ${nome}! 🎉\n\nNós da *Ótica Luz* passamos para te desejar um feliz aniversário! 🎂✨\n\nQue o seu novo ciclo seja iluminado, cheio de saúde e muitas conquistas. Como presente, traga esta mensagem até a ótica durante o seu mês para retirar um brinde exclusivo! 🕶️💝`;
       
       console.log(`🚀 Iniciando tentativa de envio para ${nome} (${numeroPuro})`);
-      
-      // Criamos uma variável para rastrear o sucesso do envio entre as tentativas
       let envioSucesso = false;
 
       try {
-        // Tentativa 1: Envio direto com o ID retornado/calculado
         const infoNumero = await whatsappClient.checkNumberStatus(`${numeroPuro}@c.us`);
         const destinatarioValido = infoNumero?.id?._serialized || `${numeroPuro}@c.us`;
         
         console.log(`📬 [Tentativa 1] Enviando para ID: ${destinatarioValido}`);
-        await whatsappClient.sendText(destinatarioValido, mensagem); 
+        await whatsappClient.sendText(destinatarioValido, message); 
         console.log(`✅ [Sucesso] Parabéns enviado na primeira tentativa para: ${nome}`);
         envioSucesso = true;
-        
       } catch (erroPrimeiraTentativa) {
         console.log(`⚠️ [Falha 1] Erro na primeira tentativa (${erroPrimeiraTentativa.message}).`);
       }
 
-      // 🔥 CORREÇÃO DO FALLBACK: Se a primeira tentativa falhou E o número tem 13 dígitos, tenta remover o 9
       if (!envioSucesso && numeroPuro.length === 13) {
         console.log(`🔄 Tentando Fallback cortando o nono dígito para o número de 13 dígitos...`);
         try {
@@ -192,7 +190,7 @@ async function verificarAniversariantesDoDia() {
           const destinatarioFallback = `${numeroSemNonoDigito}@c.us`;
           
           console.log(`📬 [Tentativa 2] Enviando para ID corrigido: ${destinatarioFallback}`);
-          await whatsappClient.sendText(destinatarioFallback, mensagem);
+          await whatsappClient.sendText(destinatarioFallback, message);
           console.log(`✅ [Sucesso] Parabéns enviado via Fallback para: ${nome}`);
           envioSucesso = true;
         } catch (erroSegundaTentativa) {
@@ -200,9 +198,8 @@ async function verificarAniversariantesDoDia() {
         }
       }
 
-      // Se mesmo após as tentativas válidas não enviou
       if (!envioSucesso) {
-        console.error(`❌ [Falha Total] A mensagem para ${nome} não pôde ser entregue (verifique a conexão ou o número).`);
+        console.error(`❌ [Falha Total] A mensagem para ${nome} não pôde ser entregue.`);
       }
       
       await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -219,7 +216,6 @@ async function verificarAniversariantesDoDia() {
 async function verificarPosVendaTrintaDias() {
   if (!whatsappClient) return;
 
-  // Escudo de carregamento do WhatsApp
   try {
     const estaConectado = await whatsappClient.isConnected();
     if (!estaConectado) return;
@@ -233,7 +229,6 @@ async function verificarPosVendaTrintaDias() {
   console.log(`🔄 Executando rotina de pós-venda para vendas de 30 dias atrás...`);
   
   try {
-    // Busca vendas feitas há exatamente 30 dias atrás, trazendo o nome do cliente e o produto
     const resultado = await turso.transaction("read").then(async (tx) => {
       const res = await tx.execute(`
         SELECT c.nome, c.telefone, v.produtos 
@@ -258,8 +253,7 @@ async function verificarPosVendaTrintaDias() {
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
-      // Texto personalizado mencionando o produto comprado
-      const mensagem = `Olá, ${nome}! Tudo bem? 😊\n\nHá cerca de um mês você esteve aqui na *Ótica Luz* e levou seu(s) produto(s): *${produtos}*.\n\nPassamos para saber como está sendo a sua experiência! Os óculos estão confortáveis? Precisando de qualquer ajuste na armação ou limpeza das lentes, lembre-se que você tem assistência gratuita aqui na loja. 🕶️✨\n\nSua satisfação é muito importante para nós!`;
+      const message = `Olá, ${nome}! Tudo bem? 😊\n\nHá cerca de um mês você esteve aqui na *Ótica Luz* e levou seu(s) product(s): *${produtos}*.\n\nPassamos para saber como está sendo a sua experiência! Os óculos estão confortáveis? Precisando de qualquer ajuste na armação ou limpeza das lentes, lembre-se que você tem assistência gratuita aqui na loja. 🕶️✨\n\nSua satisfação é muito importante para nós!`;
       
       console.log(`🚀 Enviando pós-venda para ${nome} (${numeroPuro})`);
       let envioSucesso = false;
@@ -268,18 +262,17 @@ async function verificarPosVendaTrintaDias() {
         const infoNumero = await whatsappClient.checkNumberStatus(`${numeroPuro}@c.us`);
         const destinatarioValido = infoNumero?.id?._serialized || `${numeroPuro}@c.us`;
         
-        await whatsappClient.sendText(destinatarioValido, mensagem); 
+        await whatsappClient.sendText(destinatarioValido, message); 
         console.log(`✅ [Pós-Venda] Mensagem entregue para: ${nome}`);
         envioSucesso = true;
       } catch (err) {
         console.log(`⚠️ [Pós-Venda] Falha na primeira tentativa para ${nome}.`);
       }
 
-      // Fallback do nono dígito para números de 13 dígitos
       if (!envioSucesso && numeroPuro.length === 13) {
         try {
           const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          await whatsappClient.sendText(`${numeroSemNonoDigito}@c.us`, mensagem);
+          await whatsappClient.sendText(`${numeroSemNonoDigito}@c.us`, message);
           console.log(`✅ [Pós-Venda] Mensagem entregue via Fallback para: ${nome}`);
           envioSucesso = true;
         } catch (errFallback) {
@@ -287,7 +280,6 @@ async function verificarPosVendaTrintaDias() {
         }
       }
       
-      // Delay de segurança entre mensagens
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
     
