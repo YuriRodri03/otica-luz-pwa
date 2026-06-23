@@ -74,9 +74,10 @@ export default function WhatsappControl() {
     });
   };
 
-  // Centralização das validações de estado para o layout
-  const isConectado = status === 'Conectado' || status === 'inChat' || status === 'isLogged';
-  const aguardandoQR = status === 'Aguardando Leitura do QR Code' || status === 'notLogged' || status === 'Desconectado';
+  // 🔥 MAPEAMENTO ATUALIZADO E BLINDADO PARA O ECOSSISTEMA BAILEYS:
+  const isConectado = status === 'Conectado' || status === 'open';
+  const aguardandoQR = status === 'Aguardando Leitura do QR Code' || status === 'notLogged' || status === 'Desconectado' || status === 'close';
+  const isVerificando = status === 'Buscando...' || status === 'Iniciando...' || status === 'Iniciando motor...' || status === 'connecting';
 
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-xl mx-auto w-full overflow-hidden">
@@ -101,20 +102,15 @@ export default function WhatsappControl() {
                 <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
                 <span className="text-xs sm:text-sm font-bold text-emerald-700">Sistema Ativo e Conectado!</span>
               </>
-            ) : status === 'Buscando...' || status === 'Iniciando...' ? (
+            ) : isVerificando ? (
               <>
                 <Loader2 className="w-5 h-5 text-royalBlue animate-spin shrink-0" />
-                <span className="text-xs sm:text-sm font-bold text-slate-600">Verificando serviços...</span>
+                <span className="text-xs sm:text-sm font-bold text-slate-600">Sincronizando serviços...</span>
               </>
             ) : aguardandoQR ? (
               <>
                 <Loader2 className="w-5 h-5 text-amber-500 animate-spin shrink-0" />
                 <span className="text-xs sm:text-sm font-bold text-amber-600">Aguardando leitura do QR Code...</span>
-              </>
-            ) : status === 'browserClose' ? (
-              <>
-                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 animate-pulse" />
-                <span className="text-xs sm:text-sm font-bold text-amber-700">Reiniciando motor de renderização (RAM)...</span>
               </>
             ) : (
               <>
@@ -139,7 +135,7 @@ export default function WhatsappControl() {
               ) : (
                 <div className="w-full max-w-[256px] aspect-square flex flex-col items-center justify-center space-y-2">
                   <Loader2 className="w-7 h-7 text-slate-300 animate-spin" />
-                  <p className="text-[11px] sm:text-xs text-slate-400 font-medium text-center">Gerando nova imagem de pareamento...</p>
+                  <p className="text-[11px] sm:text-xs text-slate-400 font-medium text-center">Aguardando geração do token seguro...</p>
                 </div>
               )}
             </div>
