@@ -91,7 +91,7 @@ async function inicializarWhatsApp() {
   const tokenPath = path.resolve('/opt/render/project/src/server/tokens/otica-luz-session');
   
   // Define o diretório dos tokens de autenticação
-  const { state, saveCreds, clearState } = await useMultiFileAuthState(tokenPath);
+  const { state, saveCreds } = await useMultiFileAuthState(tokenPath);
 
   try {
     whatsappClient = makeWASocket({
@@ -116,7 +116,7 @@ async function inicializarWhatsApp() {
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error)?.output?.statusCode;
         
-        // 🔥 Se for deslogado (401), limpa os arquivos corrompidos para liberar o QR Code no próximo boot
+        // Se for deslogado (401), limpa os arquivos corrompidos para liberar o QR Code no próximo boot
         const foiDeslogado = statusCode === DisconnectReason.loggedOut || statusCode === 401;
         
         console.log(`Conexão fechada. Código: ${statusCode}. Foi deslogado? ${foiDeslogado}`);
@@ -125,14 +125,19 @@ async function inicializarWhatsApp() {
         qrCodeBase64 = null;
 
         if (foiDeslogado) {
-          console.log('🧹 Limpando credenciais antigas de forma segura...');
+          console.log('🧹 Forçando limpeza física do diretório de credenciais antigas...');
           try {
-            await clearState(); // Remove os arquivos fisicamente usando a função nativa do Baileys
+            // 🔥 Remove de forma síncrona e forçada os arquivos corrompidos do disco do Render
+            const fs = await import('fs');
+            if (fs.existsSync(tokenPath)) {
+              fs.rmSync(tokenPath, { recursive: true, force: true });
+              console.log('✅ Diretório limpo com sucesso absoluto pelo FS!');
+            }
           } catch (e) {
-            console.log('Erro ao limpar diretório:', e.message);
+            console.log('Erro ao remover arquivos via fs:', e.message);
           }
           
-          // 🔥 Lança o boot limpo em seguida para gerar o QR Code na hora
+          // Lança o boot limpo em seguida para gerar o QR Code na hora
           setTimeout(() => {
             console.log('🔄 Inicializando nova instância limpa para gerar o QR Code...');
             inicializarWhatsApp();
