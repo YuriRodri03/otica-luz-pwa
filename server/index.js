@@ -12,7 +12,11 @@ const app = express();
 // 1. CONFIGURAÇÕES GLOBAIS (MIDDLEWARES)
 // ==========================================
 app.use(express.json());
-app.use(cors()); 
+app.use(cors({
+  origin: 'https://otica-luz.vercel.app', // Permite estritamente o seu front-end da Vercel
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 const PORT = process.env.PORT || 8080;
 
@@ -57,13 +61,19 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
 app.get('/', (req, res) => res.send('Servidor Ótica Luz Ativo!'));
 
 // ==========================================
-// 3. INICIALIZAÇÃO DO SERVIDOR HTTP primeiro
+// 3. INICIALIZAÇÃO DO SERVIDOR HTTP (COM ATRASO SEGURO)
 // ==========================================
 app.listen(PORT, () => {
   console.log(`🚀 Servidor HTTP rodando na porta ${PORT}`);
   
-  // Liga o WhatsApp apenas após o servidor Express estar de pé escutando as rotas
-  inicializarWhatsApp();
+  statusConexao = 'Iniciando motor...';
+
+  // 🔥 Dá um delay de 5 segundos para o Render processar que o servidor subiu com sucesso.
+  // Isso evita o erro 502 (Bad Gateway) e o crash por concorrência de memória no boot do Chromium.
+  setTimeout(() => {
+    console.log('🤖 Despachando inicialização em segundo plano do Wppconnect...');
+    inicializarWhatsApp();
+  }, 5000);
 });
 
 // ==========================================
@@ -154,7 +164,7 @@ async function verificarAniversariantesDoDia() {
     });
     
     if (resultado.rows.length === 0) {
-      console.log('📭 Nenhum aniversariante encontrado hoje.');
+      print('📭 Nenhum aniversariante encontrado hoje.');
       ultimaDataEnvio = hojeDataCompleta;
       return;
     }
