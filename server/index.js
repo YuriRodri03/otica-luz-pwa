@@ -34,6 +34,10 @@ let whatsappClient = null; // Guardará a instância ativa do socket do Baileys
 let ultimaDataEnvio = null; 
 let statusConexao = 'Iniciando...';
 let qrCodeBase64 = null;
+let clientesEnviadosHoje = [];
+let diaAtualGerenciamento = null;
+let posVendasEnviadosHoje = [];
+let diaAtualPosVendaGerenciamento = null;
 
 // ==========================================
 // 2. ROTAS DE CONTROLE PARA O FRONT-END (REACT)
@@ -192,105 +196,108 @@ async function validarNumeroWhatsApp(numeroPuro) {
 // 5. ROTINA AUTOMÁTICA DE DISPAROS
 // ==========================================
 async function verificarAniversariantesDoDia() {
-  if (!whatsappClient || statusConexao !== 'Conectado') {
-    console.log('⚠️ [Aviso Aniversários] Abortado: Cliente não inicializado ou status diferente de Conectado. Status atual:', statusConexao);
-    return;
-  }
+  if (!whatsappClient || statusConexao !== 'Conectado') return;
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
-  console.log(`🔎 [Filtro Data] Hoje é: ${hojeDataCompleta} | Último envio registrado: ${ultimaDataEnvio}`);
   
-  // Se quiser testar o envio AGORA mesmo forçado, comente a linha abaixo temporariamente:
-  if (ultimaDataEnvio === hojeDataCompleta) {
-    console.log('🚫 [Aviso Aniversários] Cancelado: As mensagens de hoje já foram enviadas anteriormente.');
-    return;
+  // Limpa a lista de controle se mudou o dia (meia-noite)
+  if (diaAtualGerenciamento !== hojeDataCompleta) {
+    console.log(`📆 Novo dia detectado (${hojeDataCompleta}). Resetando lista de envios.`);
+    diaAtualGerenciamento = hojeDataCompleta;
+    clientesEnviadosHoje = []; // Esvazia a lista para o novo dia
   }
-  
-  console.log(`🔄 Buscando aniversariantes do dia no banco Turso...`);
+
+  console.log(`🔄 Rodando checagem de aniversariantes. Já enviados hoje: ${clientesEnviadosHoje.length}`);
   
   try {
     const resultado = await turso.transaction("read").then(async (tx) => {
       const res = await tx.execute(`
-        SELECT nome, telefone FROM clientes 
+        SELECT id, nome, telefone FROM clientes 
         WHERE strftime('%m-%d', data_nascimento) = strftime('%m-%d', 'now', 'localtime')
       `);
       tx.close();
       return res;
     });
     
-    console.log(`📊 [Resultado Banco] Encontrados ${resultado.rows.length} aniversariantes no banco de dados.`);
-    
     if (resultado.rows.length === 0) {
-      console.log('📭 Nenhum aniversariante encontrado para hoje no banco.');
-      ultimaDataEnvio = hojeDataCompleta; // Registra para não ficar reexecutando à toa
       return;
     }
     
     for (const cliente of resultado.rows) {
-      const { nome, telefone } = cliente;
-      if (!telefone) {
-        console.log(`⚠️ Cliente ${nome} não possui telefone cadastrado.`);
-        continue;
+      // 🔥 O SEGREDO: Em vez de ID, se sua tabela não tiver ID, use o 'telefone' como chave única
+      const identificadorUnico = cliente.id || cliente.telefone; 
+      
+      // Se esse cliente específico já recebeu a mensagem hoje, pula ele!
+      if (clientesEnviadosHoje.includes(identificadorUnico)) {
+        continue; 
       }
+      
+      const { nome, telefone } = cliente;
+      if (!telefone) continue;
       
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
       const message = `Olá, ${nome}! 🎉\n\nNós da *Ótica Luz* passamos para te desejar um feliz aniversário! 🎂✨\n\nQue o seu novo ciclo seja iluminado, cheio de saúde e muitas conquistas. Como presente, traga esta mensagem até a ótica durante o seu mês para retirar um brinde exclusivo! 🕶️💝`;
       
-      console.log(`🚀 Preparando envio para: ${nome} | Número Processado: ${numeroPuro}`);
+      console.log(`🚀 Enviando para cliente novo do dia: ${nome} (${numeroPuro})`);
       let envioSucesso = false;
 
       try {
-        // Testa o formato padrão (com ou sem 9 dígitos dependendo do banco)
         const jidValido = await validarNumeroWhatsApp(numeroPuro);
-        console.log(`📬 [Tentativa 1] Enviando via Baileys para JID: ${jidValido}`);
         await enviarMensagemTexto(jidValido, message); 
-        console.log(`✅ [Sucesso] Mensagem enviada na primeira tentativa para: ${nome}`);
+        console.log(`✅ Mensagem entregue para: ${nome}`);
         envioSucesso = true;
-      } catch (erroPrimeiraTentativa) {
-        console.log(`⚠️ [Falha 1] Erro na primeira tentativa para ${nome}: ${erroPrimeiraTentativa.message}`);
+      } catch (err) {
+        console.log(`⚠️ Falha na primeira tentativa para ${nome}`);
       }
 
-      // Fallback para cortar o nono dígito caso a primeira tentativa falhe
       if (!envioSucesso && numeroPuro.length === 13) {
-        console.log(`🔄 [Fallback] Tentando cortar o nono dígito para o número: ${numeroPuro}`);
         try {
           const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          const jidFallback = `${numeroSemNonoDigito}@s.whatsapp.net`;
-          
-          console.log(`📬 [Tentativa 2] Enviando para JID Fallback: ${jidFallback}`);
+          const jidFallback = await validarNumeroWhatsApp(numeroSemNonoDigito);
           await enviarMensagemTexto(jidFallback, message);
-          console.log(`✅ [Sucesso] Mensagem enviada via Fallback para: ${nome}`);
+          console.log(`✅ Mensagem entregue via Fallback para: ${nome}`);
           envioSucesso = true;
-        } catch (erroSegundaTentativa) {
-          console.error(`❌ [Falha no Fallback] Não foi possível entregar para ${nome}:`, erroSegundaTentativa.message);
+        } catch (errFallback) {
+          console.error(`❌ Falha total para ${nome}`);
         }
       }
 
+      // Se enviou com sucesso (ou tentou todas as vias), coloca o cliente na lista de bloqueio de hoje
+      if (envioSucesso) {
+        clientesEnviadosHoje.push(identificadorUnico);
+      }
+      
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
-    ultimaDataEnvio = hojeDataCompleta;
   } catch (error) {
-    console.error('❌ Erro crítico dentro da rotina de aniversariantes:', error);
+    console.error('❌ Erro na rotina de aniversariantes:', error);
   }
 }
 
 // ==========================================
-// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA (30 DIAS)
+// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA (INTELIGENTE)
 // ==========================================
 async function verificarPosVendaTrintaDias() {
   if (!whatsappClient || statusConexao !== 'Conectado') return;
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
-  if (ultimaDataPosVenda === hojeDataCompleta) return;
   
-  console.log(`🔄 Executando rotina de pós-venda para vendas de 30 dias atrás...`);
+  // Limpa a lista de controle do pós-venda se mudou o dia (meia-noite)
+  if (diaAtualPosVendaGerenciamento !== hojeDataCompleta) {
+    console.log(`📆 Novo dia detectado para Pós-Venda (${hojeDataCompleta}). Resetando lista.`);
+    diaAtualPosVendaGerenciamento = hojeDataCompleta;
+    posVendasEnviadosHoje = []; // Esvazia a lista de controle do pós-venda
+  }
+
+  console.log(`🔄 Executando rotina de pós-venda. Já enviados hoje: ${posVendasEnviadosHoje.length}`);
   
   try {
     const resultado = await turso.transaction("read").then(async (tx) => {
+      // 🔥 Adicionado 'v.id AS venda_id' para rastrear cada venda de forma única
       const res = await tx.execute(`
-        SELECT c.nome, c.telefone, v.produtos 
+        SELECT v.id AS venda_id, c.nome, c.telefone, v.produtos 
         FROM vendas v
         JOIN clientes c ON v.cliente_id = c.id
         WHERE date(v.criado_em) = date('now', '-30 days', 'localtime')
@@ -301,12 +308,19 @@ async function verificarPosVendaTrintaDias() {
     
     if (resultado.rows.length === 0) {
       console.log('📭 Nenhuma venda encontrada para pós-venda hoje.');
-      ultimaDataPosVenda = hojeDataCompleta;
       return;
     }
     
     for (const venda of resultado.rows) {
-      const { nome, telefone, produtos } = venda;
+      const { venda_id, nome, telefone, produtos } = venda;
+      
+      // 🔥 O SEGREDO: Se essa venda específica já recebeu o pós-venda hoje, pula ela!
+      // Se por acaso sua tabela de vendas não tiver ID, use o 'telefone' como fallback secundário.
+      const identificadorVenda = venda_id || `${telefone}_${produtos}`;
+      if (posVendasEnviadosHoje.includes(identificadorVenda)) {
+        continue;
+      }
+      
       if (!telefone) continue;
       
       let numeroPuro = telefone.replace(/\D/g, '');
@@ -314,7 +328,7 @@ async function verificarPosVendaTrintaDias() {
       
       const message = `Olá, ${nome}! Tudo bem? 😊\n\nHá cerca de um mês você esteve aqui na *Ótica Luz* e levou seu(s) produto(s): *${produtos}*.\n\nPassamos para saber como está sendo a sua experiência! Os óculos estão confortáveis? Precisando de qualquer ajuste na armação ou limpeza das lentes, lembre-se que você tem assistência gratuita aqui na loja. 🕶️✨\n\nSua satisfação é muito importante para nós!`;
       
-      console.log(`🚀 Enviando pós-venda para ${nome} (${numeroPuro})`);
+      console.log(`🚀 Enviando pós-venda para cliente novo: ${nome} (${numeroPuro})`);
       let envioSucesso = false;
 
       try {
@@ -338,10 +352,14 @@ async function verificarPosVendaTrintaDias() {
         }
       }
       
+      // Se o envio foi feito, salva no histórico da memória para não repetir na próxima hora
+      if (envioSucesso) {
+        posVendasEnviadosHoje.push(identificadorVenda);
+      }
+      
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
     
-    ultimaDataPosVenda = hojeDataCompleta;
   } catch (error) {
     console.error('❌ Erro na rotina de pós-venda:', error);
   }
