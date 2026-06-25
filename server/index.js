@@ -192,12 +192,21 @@ async function validarNumeroWhatsApp(numeroPuro) {
 // 5. ROTINA AUTOMÁTICA DE DISPAROS
 // ==========================================
 async function verificarAniversariantesDoDia() {
-  if (!whatsappClient || statusConexao !== 'Conectado') return;
+  if (!whatsappClient || statusConexao !== 'Conectado') {
+    console.log('⚠️ [Aviso Aniversários] Abortado: Cliente não inicializado ou status diferente de Conectado. Status atual:', statusConexao);
+    return;
+  }
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
-  if (ultimaDataEnvio === hojeDataCompleta) return;
+  console.log(`🔎 [Filtro Data] Hoje é: ${hojeDataCompleta} | Último envio registrado: ${ultimaDataEnvio}`);
   
-  console.log(`🔄 Executando rotina de aniversariantes para o dia: ${hojeDataCompleta}`);
+  // Se quiser testar o envio AGORA mesmo forçado, comente a linha abaixo temporariamente:
+  if (ultimaDataEnvio === hojeDataCompleta) {
+    console.log('🚫 [Aviso Aniversários] Cancelado: As mensagens de hoje já foram enviadas anteriormente.');
+    return;
+  }
+  
+  console.log(`🔄 Buscando aniversariantes do dia no banco Turso...`);
   
   try {
     const resultado = await turso.transaction("read").then(async (tx) => {
@@ -209,58 +218,61 @@ async function verificarAniversariantesDoDia() {
       return res;
     });
     
+    console.log(`📊 [Resultado Banco] Encontrados ${resultado.rows.length} aniversariantes no banco de dados.`);
+    
     if (resultado.rows.length === 0) {
-      console.log('📭 Nenhum aniversariante encontrado hoje.');
-      ultimaDataEnvio = hojeDataCompleta;
+      console.log('📭 Nenhum aniversariante encontrado para hoje no banco.');
+      ultimaDataEnvio = hojeDataCompleta; // Registra para não ficar reexecutando à toa
       return;
     }
     
     for (const cliente of resultado.rows) {
       const { nome, telefone } = cliente;
-      if (!telefone) continue;
+      if (!telefone) {
+        console.log(`⚠️ Cliente ${nome} não possui telefone cadastrado.`);
+        continue;
+      }
       
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
       const message = `Olá, ${nome}! 🎉\n\nNós da *Ótica Luz* passamos para te desejar um feliz aniversário! 🎂✨\n\nQue o seu novo ciclo seja iluminado, cheio de saúde e muitas conquistas. Como presente, traga esta mensagem até a ótica durante o seu mês para retirar um brinde exclusivo! 🕶️💝`;
       
-      console.log(`🚀 Iniciando tentativa de envio para ${nome} (${numeroPuro})`);
+      console.log(`🚀 Preparando envio para: ${nome} | Número Processado: ${numeroPuro}`);
       let envioSucesso = false;
 
       try {
+        // Testa o formato padrão (com ou sem 9 dígitos dependendo do banco)
         const jidValido = await validarNumeroWhatsApp(numeroPuro);
-        console.log(`📬 [Tentativa 1] Enviando para JID: ${jidValido}`);
+        console.log(`📬 [Tentativa 1] Enviando via Baileys para JID: ${jidValido}`);
         await enviarMensagemTexto(jidValido, message); 
-        console.log(`✅ [Sucesso] Parabéns enviado na primeira tentativa para: ${nome}`);
+        console.log(`✅ [Sucesso] Mensagem enviada na primeira tentativa para: ${nome}`);
         envioSucesso = true;
       } catch (erroPrimeiraTentativa) {
-        console.log(`⚠️ [Falha 1] Erro na primeira tentativa: ${erroPrimeiraTentativa.message}`);
+        console.log(`⚠️ [Falha 1] Erro na primeira tentativa para ${nome}: ${erroPrimeiraTentativa.message}`);
       }
 
+      // Fallback para cortar o nono dígito caso a primeira tentativa falhe
       if (!envioSucesso && numeroPuro.length === 13) {
-        console.log(`🔄 Tentando Fallback cortando o nono dígito...`);
+        console.log(`🔄 [Fallback] Tentando cortar o nono dígito para o número: ${numeroPuro}`);
         try {
           const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          const jidFallback = await validarNumeroWhatsApp(numeroSemNonoDigito);
+          const jidFallback = `${numeroSemNonoDigito}@s.whatsapp.net`;
           
-          console.log(`📬 [Tentativa 2] Enviando para JID corrigido: ${jidFallback}`);
+          console.log(`📬 [Tentativa 2] Enviando para JID Fallback: ${jidFallback}`);
           await enviarMensagemTexto(jidFallback, message);
-          console.log(`✅ [Sucesso] Parabéns enviado via Fallback para: ${nome}`);
+          console.log(`✅ [Sucesso] Mensagem enviada via Fallback para: ${nome}`);
           envioSucesso = true;
         } catch (erroSegundaTentativa) {
-          console.error(`❌ [Falha no Fallback] Não foi possível enviar:`, erroSegundaTentativa.message);
+          console.error(`❌ [Falha no Fallback] Não foi possível entregar para ${nome}:`, erroSegundaTentativa.message);
         }
       }
 
-      if (!envioSucesso) {
-        console.error(`❌ [Falha Total] A mensagem para ${nome} não pôde ser entregue.`);
-      }
-      
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
     ultimaDataEnvio = hojeDataCompleta;
   } catch (error) {
-    console.error('❌ Erro na rotina de aniversariantes:', error);
+    console.error('❌ Erro crítico dentro da rotina de aniversariantes:', error);
   }
 }
 
