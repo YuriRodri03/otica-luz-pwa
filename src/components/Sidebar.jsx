@@ -29,10 +29,11 @@ export default function Sidebar({ telaAtiva, setTelaAtiva }) {
   return (
     <>
       {/* ------------------------------------------------------------- */}
-      {/* 1. VISÃO DESKTOP / TABLET: SIDEBAR LATERAL PREMIUM            */}
+      {/* 1. VISÃO DESKTOP / TABLET: SIDEBAR LATERAL PREMIUM (FIXED)    */}
       {/* ------------------------------------------------------------- */}
+      {/* 🔥 CORREÇÃO: Trocado a classe 'relative' por 'fixed top-0 left-0 bottom-0' para a barra colar no scroll */}
       <div 
-        className={`hidden lg:flex h-screen bg-royalBlue text-white flex-col border-r border-slate-800 sticky top-0 transition-all duration-300 relative shrink-0 z-50 shadow-xl ${
+        className={`hidden lg:flex fixed top-0 left-0 bottom-0 bg-royalBlue text-white flex-col border-r border-slate-800 transition-all duration-300 shrink-0 z-50 shadow-xl ${
           minimizado ? 'w-20' : 'w-64'
         }`}
       >
@@ -100,6 +101,15 @@ export default function Sidebar({ telaAtiva, setTelaAtiva }) {
           {minimizado ? "v1.3" : "SYSTEM V1.3.0 © ÓTICA LUZ"}
         </div>
       </div>
+
+      {/* 🔥 FANTASMA COESOR DE LAYOUT: Como a Sidebar principal flutua em Fixed, 
+          este bloco invisível ocupa o mesmo espaço horizontal em grid/flex, 
+          impedindo que os módulos e painéis do main.jsx entrem debaixo dela. */}
+      <div 
+        className={`hidden lg:block shrink-0 transition-all duration-300 ${
+          minimizado ? 'w-20' : 'w-64'
+        }`} 
+      />
 
       {/* ------------------------------------------------------------- */}
       {/* 2. VISÃO MOBILE: BARRA INFERIOR MODERNA (ESTILO MOBILE FIRST) */}

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save } from 'lucide-react'
+import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save, RotateCcw } from 'lucide-react'
 import { turso } from '../tursoClient'
 
-export default function Clientes({ clientes, setClientes }) {
+export default function Clientes({ clientes = [], setClientes }) {
   const [abaAtiva, setAbaAtiva] = useState('lista')
   const [clienteSelecionado, setClienteSelecionado] = useState(null)
   const [carregando, setCarregando] = useState(false)
@@ -13,8 +13,20 @@ export default function Clientes({ clientes, setClientes }) {
   const [vendasAgrupadas, setVendasAgrupadas] = useState([])
   const [vendaAbertaId, setVendaAbertaId] = useState(null)
 
-  // Sub-modal para retificação de valor de venda (Substitui o window.prompt)
-  const [modalVendaEdicao, setModalVendaEdicao] = useState({ aberto: false, venda: null, novoValor: '' })
+  // Estado para controlar a data de pagamento de cada parcela individualmente (Padrão: hoje)
+  const [datasPagamento, setDatasPagamento] = useState({})
+
+  // Sub-modal expandido para retificação completa da venda
+  const [modalVendaEdicao, setModalVendaEdicao] = useState({ 
+    aberto: false, 
+    id: null,
+    produtos: '',
+    metodo: '',
+    subtotal: '',
+    desconto: '',
+    entrada: '',
+    totalVenda: '' 
+  })
 
   // Estados do formulário de cadastro/edição de clientes
   const [nome, setNome] = useState('')
@@ -25,20 +37,14 @@ export default function Clientes({ clientes, setClientes }) {
   const [cidade, setCidade] = useState('')
   const [observacoes, setObservacoes] = useState('')
 
-  // ==========================================
-  // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
-  // ==========================================
   const [alertaConfig, setAlertaConfig] = useState({
     aberto: false,
-    tipo: 'aviso', // 'confirmacao' | 'erro' | 'sucesso'
+    tipo: 'aviso',
     titulo: '',
     mensagem: '',
     onConfirmar: null
   })
 
-  // ==========================================
-  // CARREGAR DADOS DO BANCO TURSO
-  // ==========================================
   const carregarClientesDoBanco = async () => {
     setCarregando(true)
     try {
@@ -55,7 +61,7 @@ export default function Clientes({ clientes, setClientes }) {
       }))
       setClientes(listaFormatada)
     } catch (error) {
-      console.error("Erro ao sincronizar clientes com o Turso:", error)
+      console.error("Erro ao sincronizar clientes:", error)
     } finally {
       setCarregando(false)
     }
@@ -65,9 +71,6 @@ export default function Clientes({ clientes, setClientes }) {
     carregarClientesDoBanco()
   }, [])
 
-  // ==========================================
-  // HISTÓRICO DE COMPRAS RELACIONAIS
-  // ==========================================
   const carregarHistoricoVendasCliente = async (clienteId) => {
     try {
       const resVendas = await turso.execute({
@@ -80,6 +83,14 @@ export default function Clientes({ clientes, setClientes }) {
         args: [clienteId]
       })
 
+      const datasIniciais = {}
+      const hojeStr = new Date().toISOString().split('T')[0]
+
+      resParcelas.rows.forEach(p => {
+        datasIniciais[p.id] = hojeStr
+      })
+      setDatasPagamento(prev => ({ ...datasIniciais, ...prev }))
+
       const vendasFormatadas = resVendas.rows.map(vendaRow => {
         const parcelasDaVenda = resParcelas.rows
           .filter(p => p.venda_id === vendaRow.id)
@@ -88,25 +99,26 @@ export default function Clientes({ clientes, setClientes }) {
             numero: p.numero_parcela,
             valor: p.valor_parcela,
             vencimento: p.data_vencimento ? p.data_vencimento.split('T')[0] : '',
-            status: p.status || 'Pendente'
+            status: p.status || 'Pendente',
+            pagoEm: p.pago_em ? p.pago_em.split('T')[0] : null
           }))
 
         return {
           id: vendaRow.id,
-          data: vendaRow.criado_em ? vendaRow.criado_em.split('T')[0] : new Date().toISOString().split('T')[0],
+          data: vendaRow.criado_em ? vendaRow.criado_em.split('T')[0] : hojeStr,
           produtos: vendaRow.produtos,
-          metodo: vendaRow.metodo_venda === 'Crediário' ? 'Crediário Próprio' : vendaRow.metodo_venda,
-          subtotal: vendaRow.subtotal,
-          desconto: vendaRow.desconto,
-          entrada: vendaRow.valor_entrada,
-          totalVenda: vendaRow.total_liquido, 
+          metodo: vendaRow.metodo_venda,
+          subtotal: vendaRow.subtotal || 0,
+          desconto: vendaRow.desconto || 0,
+          entrada: vendaRow.valor_entrada || 0,
+          totalVenda: vendaRow.total_liquido || 0, 
           parcelas: parcelasDaVenda
         }
       })
 
       setVendasAgrupadas(vendasFormatadas)
     } catch (error) {
-      console.error("Erro ao montar histórico por tabelas relacionais:", error)
+      console.error("Erro ao montar histórico:", error)
     }
   }
 
@@ -115,9 +127,6 @@ export default function Clientes({ clientes, setClientes }) {
     carregarHistoricoVendasCliente(clienteSelecionado.id)
   }, [clienteSelecionado])
 
-  // ==========================================
-  // FUNÇÕES DE MÁSCARA EM TEMPO REAL (MÁXIMO FIXADO)
-  // ==========================================
   const aplicarMascaraCPF = (valor) => {
     const limpo = valor.replace(/\D/g, '').slice(0, 11)
     setCpf(limpo.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4"))
@@ -133,23 +142,37 @@ export default function Clientes({ clientes, setClientes }) {
   }
 
   // ==========================================
-  // OPERAÇÕES FINANCEIRAS COESAS (MODAIS EMBUTIDOS)
+  // SALVAR EDIÇÃO COMPLETA DA VENDA
   // ==========================================
   const handleSalvarEditarVenda = async (e) => {
     e.preventDefault()
-    const { venda, novoValor } = modalVendaEdicao
-    if (!novoValor || isNaN(parseFloat(novoValor))) return
+    const { id, produtos, metodo, subtotal, desconto, entrada, totalVenda } = modalVendaEdicao
 
     try {
       await turso.execute({
-        sql: "UPDATE vendas SET total_liquido = ? WHERE id = ?",
-        args: [parseFloat(novoValor), venda.id]
+        sql: `UPDATE vendas SET 
+                produtos = ?, 
+                metodo_venda = ?, 
+                subtotal = ?, 
+                desconto = ?, 
+                valor_entrada = ?, 
+                total_liquido = ? 
+              WHERE id = ?`,
+        args: [
+          produtos.trim(), 
+          metodo, 
+          parseFloat(subtotal) || 0, 
+          parseFloat(desconto) || 0, 
+          parseFloat(entrada) || 0, 
+          parseFloat(totalVenda) || 0, 
+          id
+        ]
       })
       await carregarHistoricoVendasCliente(clienteSelecionado.id)
-      setModalVendaEdicao({ aberto: false, venda: null, novoValor: '' })
-      setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Sucesso', mensagem: 'Valor da venda retificado com sucesso!', onConfirmar: null })
+      setModalVendaEdicao({ aberto: false, id: null, produtos: '', metodo: '', subtotal: '', desconto: '', entrada: '', totalVenda: '' })
+      setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Sucesso', mensagem: 'Dados da venda retificados com sucesso!', onConfirmar: null })
     } catch (error) {
-      console.error(error)
+      console.error("Erro ao retificar venda:", error)
     }
   }
 
@@ -173,14 +196,19 @@ export default function Clientes({ clientes, setClientes }) {
   }
 
   const baixarParcelaDoCliente = (parcela) => {
+    const dataEscolhida = datasPagamento[parcela.id] || new Date().toISOString().split('T')[0]
+    
     setAlertaConfig({
       aberto: true,
       tipo: 'confirmacao',
       titulo: 'Liquidar Crediário',
-      mensagem: `Confirmar o recebimento em caixa da parcela número ${parcela.numero}?`,
+      mensagem: `Confirmar o recebimento da parcela número ${parcela.numero} efetuado no dia ${formatarDataBR(dataEscolhida)}?`,
       onConfirmar: async () => {
         try {
-          await turso.execute({ sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?", args: [parcela.id] })
+          await turso.execute({ 
+            sql: "UPDATE parcelas_carne SET status = 'Pago', pago_em = ? WHERE id = ?", 
+            args: [dataEscolhida, parcela.id] 
+          })
           await carregarHistoricoVendasCliente(clienteSelecionado.id)
           setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Parcela Paga', mensagem: 'Recebimento homologado com sucesso.', onConfirmar: null })
         } catch (error) {
@@ -191,8 +219,29 @@ export default function Clientes({ clientes, setClientes }) {
   }
 
   // ==========================================
-  // OPERAÇÕES CADASTRAS DO FORMULÁRIO CLIENTES
+  // OPERAÇÃO DE ESTORNO DE BAIXA DA PARCELA
   // ==========================================
+  const estornarBaixaParcela = (parcela) => {
+    setAlertaConfig({
+      aberto: true,
+      tipo: 'confirmacao',
+      titulo: 'Estornar Pagamento',
+      mensagem: `Deseja reverter a baixa da parcela número ${parcela.numero}? O status retornará para 'Pendente'.`,
+      onConfirmar: async () => {
+        try {
+          await turso.execute({
+            sql: "UPDATE parcelas_carne SET status = 'Pendente', pago_em = NULL WHERE id = ?",
+            args: [parcela.id]
+          })
+          await carregarHistoricoVendasCliente(clienteSelecionado.id)
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Estorno Homologado', mensagem: 'A parcela retornou para o estado pendente.', onConfirmar: null })
+        } catch (error) {
+          console.error("Erro ao estornar parcela:", error)
+        }
+      }
+    })
+  }
+
   const handleSalvar = async (e) => {
     e.preventDefault()
     if (!nome || !cpf || !dataNascimento) return
@@ -247,12 +296,12 @@ export default function Clientes({ clientes, setClientes }) {
       aberto: true,
       tipo: 'confirmacao',
       titulo: 'Remover Cliente',
-      mensagem: `Deseja deletar permanentemente a ficha cadastral de "${nomeCliente}"? Isso não removerá o histórico financeiro retroativo por integridade de auditoria.`,
+      mensagem: `Deseja deletar permanentemente a ficha cadastral de "${nomeCliente}"?`,
       onConfirmar: async () => {
         try {
           await turso.execute({ sql: "DELETE FROM clientes WHERE id = ?", args: [id] })
           await carregarClientesDoBanco()
-          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Ficha Excluída', mensagem: 'Cliente removido da carteira ativa.', onConfirmar: null })
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Ficha Excluída', mensagem: 'Cliente removido da carteira activa.', onConfirmar: null })
         } catch (error) {
           console.error(error)
         }
@@ -295,12 +344,18 @@ export default function Clientes({ clientes, setClientes }) {
     return telString
   }
 
-  const clientesFiltradosEOrdenados = clientes
+  const clientesFiltradosEOrdenados = (clientes || [])
     .filter(c => {
-      const t = termoBusca.toLowerCase()
-      return c.nome?.toLowerCase().includes(t) || c.cpf?.includes(t.replace(/\D/g, ''))
+      const t = termoBusca.toLowerCase().trim()
+      if (!t) return true
+      const nomeCliente = String(c.nome || '').toLowerCase()
+      const nomeMatch = nomeCliente.includes(t)
+      const cpfCliente = String(c.cpf || '')
+      const cpfLimpoBusca = t.replace(/\D/g, '')
+      const cpfMatch = cpfLimpoBusca ? cpfCliente.includes(cpfLimpoBusca) : false
+      return nomeMatch || cpfMatch
     })
-    .sort((a, b) => a.nome.localeCompare(b.nome))
+    .sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')))
 
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-full overflow-hidden">
@@ -388,7 +443,16 @@ export default function Clientes({ clientes, setClientes }) {
                         <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 shrink-0">
                           <p className="font-extrabold text-royalBlue text-sm sm:text-base">R$ {venda.totalVenda.toFixed(2)}</p>
                           <div className="flex items-center space-x-1.5">
-                            <button onClick={() => setModalVendaEdicao({ aberto: true, venda, novoValor: venda.totalVenda.toString() })} className="p-1.5 bg-white text-slate-500 hover:bg-royalBlue hover:text-white rounded-md border border-slate-200 transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => setModalVendaEdicao({ 
+                              aberto: true, 
+                              id: venda.id,
+                              produtos: venda.produtos,
+                              metodo: venda.metodo,
+                              subtotal: venda.subtotal.toString(),
+                              desconto: venda.desconto.toString(),
+                              entrada: venda.entrada.toString(),
+                              totalVenda: venda.totalVenda.toString()
+                            })} className="p-1.5 bg-white text-slate-500 hover:bg-royalBlue hover:text-white rounded-md border border-slate-200 transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
                             <button onClick={() => handleRemoverVenda(venda.id)} className="p-1.5 bg-white text-rose-500 hover:bg-rose-600 hover:text-white rounded-md border border-slate-200 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                             <div onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)} className="cursor-pointer px-2 py-1 hover:bg-slate-200/50 rounded-md">
                               {vendaAbertaId === venda.id ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
@@ -407,15 +471,39 @@ export default function Clientes({ clientes, setClientes }) {
                                   <div className="flex justify-between sm:flex-col sm:space-y-0.5 w-full sm:w-auto">
                                     <p className="font-bold text-slate-700">Parcela {parc.numero}</p>
                                     <p className="text-slate-400 font-medium">Venc.: {formatarDataBR(parc.vencimento)}</p>
+                                    {parc.status === 'Pago' && parc.pagoEm && (
+                                      <p className="text-emerald-600 font-medium text-[11px]">Recebido em: {formatarDataBR(parc.pagoEm)}</p>
+                                    )}
                                   </div>
-                                  <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-dashed border-slate-100">
+                                  <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-dashed border-slate-100">
                                     <p className="font-bold text-slate-800">R$ {parseFloat(parc.valor).toFixed(2)}</p>
                                     <div className="flex items-center space-x-2">
                                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{parc.status}</span>
+                                      
                                       {parc.status !== 'Pago' ? (
-                                        <button onClick={() => baixarParcelaDoCliente(parc)} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1 rounded transition-colors shadow-sm">Liquidar</button>
+                                        <div className="flex items-center space-x-2 bg-slate-50 p-1 rounded-md border border-slate-200">
+                                          <input 
+                                            type="date" 
+                                            className="border-0 bg-transparent text-[11px] font-medium text-slate-700 focus:outline-none p-0.5"
+                                            value={datasPagamento[parc.id] || ''} 
+                                            onChange={(e) => setDatasPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
+                                          />
+                                          <button 
+                                            onClick={() => baixarParcelaDoCliente(parc)} 
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1 rounded transition-colors shadow-sm"
+                                          >
+                                            Liquidar
+                                          </button>
+                                        </div>
                                       ) : (
-                                        <span className="text-[11px] font-medium text-slate-400 italic bg-slate-100 px-2 py-0.5 rounded">Baixada</span>
+                                        <button 
+                                          onClick={() => estornarBaixaParcela(parc)}
+                                          className="flex items-center space-x-1 text-[10px] font-semibold text-rose-600 hover:text-white hover:bg-rose-600 bg-rose-50 border border-rose-200 px-2 py-1 rounded transition-all shadow-sm"
+                                          title="Estornar baixa da parcela"
+                                        >
+                                          <RotateCcw className="w-3 h-3" />
+                                          <span>Estornar</span>
+                                        </button>
                                       )}
                                     </div>
                                   </div>
@@ -483,7 +571,7 @@ export default function Clientes({ clientes, setClientes }) {
         </div>
       )}
 
-      {/* FORMULÁRIO DE CADASTRO COM MÁSCARAS FIXADAS */}
+      {/* FORMULÁRIO DE CADASTRO */}
       {abaAtiva === 'cadastro' && !clienteSelecionado && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
           <div className="bg-royalBlue p-4 text-white font-bold border-b-4 border-gold text-xs sm:text-sm">
@@ -530,21 +618,53 @@ export default function Clientes({ clientes, setClientes }) {
         </div>
       )}
 
-      {/* 💻 SUB-MODAL EXCLUSIVO PARA RETIFICAÇÃO DE VALOR DE VENDA (SUBSTITUTO DO PROMPT) */}
+      {/* SUB-MODAL EXCLUSIVO PARA RETIFICAÇÃO COMPLETA DA VENDA */}
       {modalVendaEdicao.aberto && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm p-3">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border-t-4 border-gold">
             <div className="bg-royalBlue p-4 text-white font-bold flex justify-between items-center">
-              <span className="text-xs sm:text-sm">Retificar Valor da Venda</span>
-              <button onClick={() => setModalVendaEdicao({ aberto: false, venda: null, novoValor: '' })} className="text-slate-300 hover:text-white">✕</button>
+              <span className="text-xs sm:text-sm">Editar Detalhes Faturamento da Venda</span>
+              <button onClick={() => setModalVendaEdicao({ aberto: false, id: null, produtos: '', metodo: '', subtotal: '', desconto: '', entrada: '', totalVenda: '' })} className="text-slate-300 hover:text-white">✕</button>
             </div>
             <form onSubmit={handleSalvarEditarVenda} className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Novo Total Líquido (R$)</label>
-                <input type="number" step="0.01" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" value={modalVendaEdicao.novoValor} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, novoValor: e.target.value }))} required />
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Produtos Adquiridos</label>
+                <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" value={modalVendaEdicao.produtos} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, produtos: e.target.value }))} required />
               </div>
-              <div className="flex space-x-2 justify-end">
-                <button type="button" onClick={() => setModalVendaEdicao({ aberto: false, venda: null, novoValor: '' })} className="bg-slate-100 px-4 py-2 rounded-lg text-xs font-semibold text-slate-700">Cancelar</button>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Método de Venda</label>
+                  <select className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue bg-white" value={modalVendaEdicao.metodo} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, metodo: e.target.value }))} required>
+                    <option value="PIX">PIX</option>
+                    <option value="DH">Dinheiro (DH)</option>
+                    <option value="Cartão">Cartão</option>
+                    <option value="Crediário">Crediário Próprio</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Subtotal (R$)</label>
+                  <input type="number" step="0.01" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" value={modalVendaEdicao.subtotal} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, subtotal: e.target.value }))} required />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Desconto (R$)</label>
+                  <input type="number" step="0.01" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" value={modalVendaEdicao.desconto} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, desconto: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Entrada (R$)</label>
+                  <input type="number" step="0.01" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" value={modalVendaEdicao.entrada} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, entrada: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Total Líquido (R$)</label>
+                  <input type="number" step="0.01" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue font-bold text-royalBlue" value={modalVendaEdicao.totalVenda} onChange={(e) => setModalVendaEdicao(prev => ({ ...prev, totalVenda: e.target.value }))} required />
+                </div>
+              </div>
+
+              <div className="flex space-x-2 justify-end pt-2">
+                <button type="button" onClick={() => setModalVendaEdicao({ aberto: false, id: null, produtos: '', metodo: '', subtotal: '', desconto: '', entrada: '', totalVenda: '' })} className="bg-slate-100 px-4 py-2 rounded-lg text-xs font-semibold text-slate-700">Cancelar</button>
                 <button type="submit" className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs font-semibold border-b-2 border-gold flex items-center space-x-1"><Save className="w-3.5 h-3.5" /><span>Salvar</span></button>
               </div>
             </form>
@@ -552,7 +672,7 @@ export default function Clientes({ clientes, setClientes }) {
         </div>
       )}
 
-      {/* 🔔 MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO DA ÓTICA LUZ */}
+      {/* MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO */}
       {alertaConfig.aberto && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
@@ -575,7 +695,7 @@ export default function Clientes({ clientes, setClientes }) {
                 {alertaConfig.tipo === 'confirmacao' ? (
                   <>
                     <button type="button" onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold">Não, voltar</button>
-                    <button type="button" onClick={alertaConfig.onConfirmar} className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm">Sim, executar</button>
+                    <button type="button" onClick={() => { alertaConfig.onConfirmar(); setAlertaConfig(prev => ({ ...prev, aberto: false })); }} className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm">Sim, executar</button>
                   </>
                 ) : (
                   <button type="button" onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold">Entendido</button>

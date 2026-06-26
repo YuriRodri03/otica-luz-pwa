@@ -6,6 +6,9 @@ export default function Crediario() {
   const [carnes, setCarnes] = useState([])
   const [carregando, setCarregando] = useState(false)
 
+  // Estado para capturar a data de recebimento no momento da baixa
+  const [dataRecebimento, setDataRecebimento] = useState(new Date().toISOString().split('T')[0])
+
   // ==========================================
   // ESTADOS DE FILTRAGEM TEMPORAL
   // ==========================================
@@ -92,12 +95,15 @@ export default function Crediario() {
   // EFETUAR RECEBIMENTO E ATUALIZAR TABELAS
   // ==========================================
   const darBaixa = (item) => {
+    // Resetar para a data atual do dia ao abrir um novo recebimento
+    setDataRecebimento(new Date().toISOString().split('T')[0])
+
     setAlertaConfig({
       aberto: true,
       tipo: 'confirmacao',
       titulo: 'Confirmar Recebimento',
       mensagem: `Deseja homologar o recebimento no valor de R$ ${item.valorParcela.toFixed(2)} referente à parcela ${item.parcelaNumero} do cliente ${item.cliente}?`,
-      onConfirmar: async () => {
+      onConfirmar: async (dataEscolhida) => {
         try {
           await turso.execute({
             sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?",
@@ -106,9 +112,12 @@ export default function Crediario() {
 
           const descricaoAuditoria = `[Baixa de Carnê] Parcela ${item.parcelaNumero} - Cliente: ${item.cliente} (CPF: ${item.cpf}) | RefChave: ${item.idVendaOrigem}_${item.parcelaNumero.split('/')[0]}`
 
+          // Salva o lançamento utilizando a data escolhida no input (em formato ISO completo ou a data pura)
+          const dataInjecao = dataEscolhida ? new Date(dataEscolhida + 'T12:00:00').toISOString() : new Date().toISOString()
+
           await turso.execute({
             sql: "INSERT INTO lancamentos (descricao, tipo, valor, metodo, data) VALUES (?, ?, ?, ?, ?)",
-            args: [descricaoAuditoria, 'entrada', item.valorParcela, 'Dinheiro', new Date().toISOString()]
+            args: [descricaoAuditoria, 'entrada', item.valorParcela, 'Dinheiro', dataInjecao]
           })
 
           await carregarCrediarioDoBanco()
@@ -298,9 +307,22 @@ export default function Crediario() {
                 }`}>
                   {alertaConfig.tipo === 'erro' ? <XCircle className="w-6 h-6" /> : alertaConfig.tipo === 'sucesso' ? <CheckCircle className="w-6 h-6" /> : <AlertTriangle className="w-6 h-6" />}
                 </div>
-                <div className="space-y-1 min-w-0">
+                <div className="space-y-1 min-w-0 flex-1">
                   <h3 className="text-base font-bold text-slate-800 tracking-tight">{alertaConfig.titulo}</h3>
-                  <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">{alertaConfig.mensagem}</p>
+                  <p className="text-xs sm:text-sm text-slate-500 leading-relaxed mb-3">{alertaConfig.mensagem}</p>
+                  
+                  {/* INJETANDO SELEÇÃO DE DATA DE RECEBIMENTO EXCLUSIVA PARA CONFIRMAÇÃO DE PAGAMENTO */}
+                  {alertaConfig.tipo === 'confirmacao' && (
+                    <div className="mt-3 bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">Data do Recebimento:</label>
+                      <input 
+                        type="date" 
+                        value={dataRecebimento} 
+                        onChange={(e) => setDataRecebimento(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs sm:text-sm font-semibold text-slate-700 focus:outline-none focus:border-royalBlue"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -317,7 +339,7 @@ export default function Crediario() {
                     <button 
                       type="button" 
                       onClick={() => {
-                        if (alertaConfig.onConfirmar) alertaConfig.onConfirmar();
+                        if (alertaConfig.onConfirmar) alertaConfig.onConfirmar(dataRecebimento);
                         setAlertaConfig(prev => ({ ...prev, aberto: false }));
                       }} 
                       className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm transition-colors"

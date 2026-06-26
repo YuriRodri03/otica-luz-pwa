@@ -14,9 +14,8 @@ import Dashboard from './pages/Dashboard'
 import FluxoCaixa from './pages/FluxoCaixa'
 import Crediario from './pages/Crediario'
 import Clientes from './pages/Clientes'
-import Usuarios from './pages/Usuarios' 
+import Usuarios from './pages/Usuarios'    
 import Login from './pages/Login'    
-// 🔥 NOVO: Importação do painel de pareamento e controle do robô
 import Whatsapp from './pages/Whatsapp'
 
 function PainelInterno({ 
@@ -31,16 +30,16 @@ function PainelInterno({
   setLancamentos, 
   carregando 
 }) {
-  // Controle da tela visível por estado para evitar que os inputs sumam ao mudar de aba
+  // Controle da tela visível por estado para evitar perda de inputs
   const [telaAtiva, setTelaAtiva] = useState('dashboard')
 
   return (
     <div className="flex bg-slate-50 min-h-screen relative overflow-hidden">
       
-      {/* EFEITO DE BRILHO FLUIDO NO BACKGROUND */}
+      {/* EFEITO DE BRILHO FLUIDO NO BACKGROUND (CORRIGIDO PARA EVITAR PULOS) */}
       <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vh] rounded-full bg-gradient-to-br from-gold/10 to-transparent blur-[120px] pointer-events-none animate-pulse duration-[6000ms]" />
       <div className="absolute bottom-[-10%] right-[-5%] w-[45vw] h-[45vh] rounded-full bg-gradient-to-tl from-royalBlue/5 to-transparent blur-[100px] pointer-events-none animate-pulse duration-[8000ms]" />
-      <div className="absolute top-[30%] right-[20%] w-[15vw] h-[15vh] rounded-full bg-gold/5 blur-[60px] pointer-events-none animate-bounce duration-[12000ms]" />
+      <div className="absolute top-[30%] right-[20%] w-[15vw] h-[15vh] rounded-full bg-gold/5 blur-[60px] pointer-events-none animate-pulse duration-[4000ms]" />
 
       {/* Menu Lateral Fixo */}
       <Sidebar className="relative z-10" telaAtiva={telaAtiva} setTelaAtiva={setTelaAtiva} />
@@ -51,19 +50,31 @@ function PainelInterno({
         
         <main className="flex-1 p-8 max-w-7xl mx-auto w-full overflow-y-auto">
           {carregando && (
-            <div className="text-xs font-semibold text-slate-400 animate-pulse mb-4">
-              Sincronizando dados com o banco de dados...
+            <div className="text-xs font-semibold text-slate-400 animate-pulse mb-4 flex items-center space-x-2">
+              <Loader2 className="w-3 h-3 animate-spin text-royalBlue" />
+              <span>Sincronizando dados dinamicamente com o banco de dados...</span>
             </div>
           )}
           
-          {/* Renderização condicional mantendo estados vivos na memória */}
-          <div className={telaAtiva === 'dashboard' ? 'block' : 'hidden'}><Dashboard /></div>
-          <div className={telaAtiva === 'fluxo' ? 'block' : 'hidden'}><FluxoCaixa lancamentos={lancamentos} setLancamentos={setLancamentos} clientes={clientes} carregarLancamentosDoBanco={carregarDadosIniciais} /></div>
-          <div className={telaAtiva === 'crediario' ? 'block' : 'hidden'}><Crediario crediarios={crediarios} setCrediarios={setCrediarios} lancamentos={lancamentos} setLancamentos={setLancamentos} /></div>
-          <div className={telaAtiva === 'clientes' ? 'block' : 'hidden'}><Clientes clientes={clientes} setClientes={setClientes} atualizarClientesDoBanco={carregarDadosIniciais} /></div>
-          <div className={telaAtiva === 'usuarios' ? 'block' : 'hidden'}><Usuarios /></div>
-          {/* 🔥 NOVO: Gerenciamento em memória da interface visual do robô do WhatsApp */}
-          <div className={telaAtiva === 'whatsapp' ? 'block' : 'hidden'}><Whatsapp /></div>
+          {/* Renderização condicional injetando os gatilhos mutáveis do banco de dados */}
+          <div className={telaAtiva === 'dashboard' ? 'block' : 'hidden'}>
+            <Dashboard lancamentos={lancamentos} clientes={clientes} />
+          </div>
+          <div className={telaAtiva === 'fluxo' ? 'block' : 'hidden'}>
+            <FluxoCaixa lancamentos={lancamentos} setLancamentos={setLancamentos} clientes={clientes} carregarLancamentosDoBanco={carregarDadosIniciais} />
+          </div>
+          <div className={telaAtiva === 'crediario' ? 'block' : 'hidden'}>
+            <Crediario crediarios={crediarios} setCrediarios={setCrediarios} lancamentos={lancamentos} setLancamentos={setLancamentos} atualizarDados={carregarDadosIniciais} />
+          </div>
+          <div className={telaAtiva === 'clientes' ? 'block' : 'hidden'}>
+            <Clientes clientes={clientes} setClientes={setClientes} atualizarClientesDoBanco={carregarDadosIniciais} />
+          </div>
+          <div className={telaAtiva === 'usuarios' ? 'block' : 'hidden'}>
+            <Usuarios />
+          </div>
+          <div className={telaAtiva === 'whatsapp' ? 'block' : 'hidden'}>
+            <Whatsapp />
+          </div>
         </main>
       </div>
     </div>
@@ -84,10 +95,8 @@ function App() {
   const carregarDadosIniciais = async () => {
     if (!usuarioLogado) return
     setCarregando(true)
-    const tempoInicio = Date.now()
 
     try {
-      // Ajustado para ler a tabela correta de vendas ordenando por criação
       const [resClientes, resLancamentos] = await Promise.all([
         turso.execute("SELECT * FROM clientes ORDER BY nome ASC"),
         turso.execute("SELECT * FROM vendas ORDER BY criado_em DESC")
@@ -99,14 +108,7 @@ function App() {
     } catch (error) {
       console.error("Erro no carregamento conjunto do banco:", error)
     } finally { 
-      const tempoDecorrido = Date.now() - tempoInicio
-      const tempoMinimo = 5000 
-
-      if (tempoDecorrido < tempoMinimo) {
-        setTimeout(() => { setCarregando(false) }, tempoMinimo - tempoDecorrido)
-      } else {
-        setCarregando(false)
-      }
+      setCarregando(false)
     }
   }
 
@@ -116,6 +118,7 @@ function App() {
     }
   }, [usuarioLogado])
 
+  // Loader restrito estritamente ao carregamento inicial para evitar travar a tela nas edições internas
   if (usuarioLogado && carregando && clientes.length === 0) {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center bg-slate-900 text-white z-[9999]">
@@ -128,7 +131,7 @@ function App() {
           </div>
           <div>
             <h3 className="text-lg font-bold text-slate-100 tracking-wide">Ótica Luz</h3>
-            <p className="text-xs text-slate-400 mt-1">Sincronizando tables com a base de dados Turso...</p>
+            <p className="text-xs text-slate-400 mt-1">Sincronizando tabelas com a base de dados Turso...</p>
           </div>
           <div className="w-full bg-slate-700 h-1 rounded-full overflow-hidden">
             <div className="bg-gold h-full w-2/3 animate-pulse rounded-full" />
