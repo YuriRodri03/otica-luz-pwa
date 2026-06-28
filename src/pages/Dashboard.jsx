@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [dadosAnuais, setDadosAnuais] = useState([])
   const [vendasMensais, setVendasMensais] = useState([])
   const [totalDespesasPagasMes, setTotalDespesasPagasMes] = useState(0)
+  const [totalParcelasPagasMes, setTotalParcelasPagasMes] = useState(0)
   const [dadosLinha, setDadosLinha] = useState([])
   const [dadosPizza, setDadosPizza] = useState([])
 
@@ -151,7 +152,7 @@ export default function Dashboard() {
       })
 
       // ==========================================
-      // 6. FECHAMENTO MENSAL (CONSOLIDADO COM A TABELA)
+      // 6. FECHAMENTO MENSAL CORRIGIDO (BUSCANDO PARCELAS DO MÊS)
       // ==========================================
       const mesFormatado = mesFiltro.toString().padStart(2, '0')
       
@@ -165,6 +166,20 @@ export default function Dashboard() {
       `)
       const listaVendas = resVendasMensais.rows
       setVendasMensais(listaVendas)
+
+      // 🔥 NOVA CONSULTA: Captura amortizações físicas de crediários pagas NESTE mês específico
+      const resParcelasMensais = await turso.execute(`
+        SELECT 
+          strftime('%d', CASE WHEN pago_em IS NULL OR TRIM(pago_em) = '' OR LOWER(pago_em) = 'none' OR LOWER(pago_em) = 'nan' THEN data_vencimento ELSE pago_em END) as dia, 
+          valor_parcela 
+        FROM parcelas_carne 
+        WHERE status = 'Pago' 
+          AND strftime('%m', CASE WHEN pago_em IS NULL OR TRIM(pago_em) = '' OR LOWER(pago_em) = 'none' OR LOWER(pago_em) = 'nan' THEN data_vencimento ELSE pago_em END) = '${mesFormatado}'
+          AND strftime('%Y', CASE WHEN pago_em IS NULL OR TRIM(pago_em) = '' OR LOWER(pago_em) = 'none' OR LOWER(pago_em) = 'nan' THEN data_vencimento ELSE pago_em END) = '${anoFiltro}'
+      `)
+      const listaParcelasPagas = resParcelasMensais.rows
+      const somaParcelasDoMes = listaParcelasPagas.reduce((acc, curr) => acc + (curr.valor_parcela || 0), 0)
+      setTotalParcelasPagasMes(somaParcelasDoMes)
 
       const resDespesasMensais = await turso.execute(`
         SELECT strftime('%d', data) as dia, valor FROM despesas
@@ -186,22 +201,27 @@ export default function Dashboard() {
       const CORES = ['#002060', '#D4AF37', '#8D6E63', '#AA7C11']
       setDadosPizza(resMetodos.rows.map((r, i) => ({ name: r.metodo_venda, value: r.total, color: CORES[i % CORES.length] })))
 
-      // Montando o Gráfico Diário Derivado estritamente do faturamento real das vendas listadas + despesas
+      // Montando o Gráfico Diário Consolidando Vendas à Vista + Entradas + Parcelas Recebidas do Crediário
       const diasNoMes = new Date(anoFiltro, mesFiltro, 0).getDate()
       const mapaDias = {}
       
       for (let i = 1; i <= diasNoMes; i++) {
-        mapaDias[i.toString().padStart(2, '0')] = { vendasReal: 0, despesasReal: 0 }
+        mapaDias[i.toString().padStart(2, '0')] = { faturamentoCaixa: 0, despesasReal: 0 }
       }
 
+      // Adiciona entradas imediatas e vendas normais
       listaVendas.forEach(v => {
         const dia = new Date(v.criado_em).getDate().toString().padStart(2, '0')
-        // Se for crediário/parcelado, entra apenas o valor recebido na hora (valor_entrada). Caso contrário, entra o total líquido.
         const valorEntradoEfetivo = v.metodo_venda?.toLowerCase().includes('cred') || v.metodo_venda?.toLowerCase().includes('x')
           ? (v.valor_entrada || 0)
           : (v.total_liquido || 0)
           
-        if (mapaDias[dia]) mapaDias[dia].vendasReal += valorEntradoEfetivo
+        if (mapaDias[dia]) mapaDias[dia].faturamentoCaixa += valorEntradoEfetivo
+      })
+
+      // 🔥 Adiciona os pagamentos de parcelas retroativas recebidas no dia correspondente
+      listaParcelasPagas.forEach(p => {
+        if (mapaDias[p.dia]) mapaDias[p.dia].faturamentoCaixa += (p.valor_parcela || 0)
       })
 
       listaDespesas.forEach(d => {
@@ -210,7 +230,7 @@ export default function Dashboard() {
 
       const dadosLinhaFormatados = Object.keys(mapaDias).sort().map(dia => ({
         name: `Dia ${dia}`,
-        "Saldo Diário": mapaDias[dia].vendasReal - mapaDias[dia].despesasReal
+        "Saldo Diário": mapaDias[dia].faturamentoCaixa - mapaDias[dia].despesasReal
       }))
       setDadosLinha(dadosLinhaFormatados)
 
@@ -229,16 +249,17 @@ export default function Dashboard() {
     return metodoFiltroTabela === 'todos' || v.metodo_venda === metodoFiltroTabela
   })
 
-  // Totais calculados de forma 100% fiel ao estado da tabela local
   const faturamentoMensalTotal = vendasMensais.reduce((sum, v) => sum + v.total_liquido, 0)
   
+  // Total que entrou em dinheiro/PIX/Cartão + entradas de crediários
   const totalEntradasCaixaMensal = vendasMensais.reduce((sum, v) => {
     return sum + (v.metodo_venda?.toLowerCase().includes('cred') || v.metodo_venda?.toLowerCase().includes('x')
       ? (v.valor_entrada || 0)
       : (v.total_liquido || 0))
   }, 0)
   
-  const caixaImediatoMensal = totalEntradasCaixaMensal - totalDespesasPagasMes
+  // Caixa Líquido Real = (Entradas + Parcelas Recebidas no mês) - Despesas do mês
+  const caixaImediatoMensal = (totalEntradasCaixaMensal + totalParcelasPagasMes) - totalDespesasPagasMes
 
   if (carregando) {
     return (
