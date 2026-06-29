@@ -25,7 +25,8 @@ const PORT = process.env.PORT || 8080;
 // Conexão com o banco Turso (Limpa para evitar bugs de lote)
 const turso = createClient({
   url: process.env.TURSO_DATABASE_URL,
-  authToken: process.env.TURSO_AUTH_TOKEN
+  authToken: process.env.TURSO_AUTH_TOKEN,
+  introspect: "disabled"
 });
 
 let ultimaDataPosVenda = null;
