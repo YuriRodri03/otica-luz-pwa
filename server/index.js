@@ -50,6 +50,43 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
+// 🔔 NOVA ROTA: Obter os modelos de mensagens cadastrados
+app.get('/api/whatsapp/config-mensagens', async (req, res) => {
+  try {
+    const r = await turso.execute("SELECT * FROM configuracoes");
+    const configs = {};
+    r.rows.forEach(row => {
+      configs[row.chave] = row.valor;
+    });
+    res.json({
+      msg_aniversario: configs.msg_aniversario || '',
+      msg_pos_venda: configs.msg_pos_venda || ''
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao buscar configurações no Turso: ' + error.message });
+  }
+});
+
+// 🔔 NOVA ROTA: Atualizar os modelos de mensagens vindos do React
+app.post('/api/whatsapp/config-mensagens', async (req, res) => {
+  const { msg_aniversario, msg_pos_venda } = req.body;
+  try {
+    await turso.batch([
+      {
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
+        args: [msg_aniversario]
+      },
+      {
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
+        args: [msg_pos_venda]
+      }
+    ]);
+    res.json({ success: true, message: 'Modelos de mensagens salvos com sucesso!' });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro ao salvar configurações no Turso: ' + error.message });
+  }
+});
+
 app.post('/api/whatsapp/desconectar', async (req, res) => {
   if (!whatsappClient) {
     return res.status(400).json({ error: 'WhatsApp não está ativo para desconectar.' });
@@ -63,7 +100,6 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
     
     res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
 
-    // 🔥 Força a reinicialização automática em background para gerar um novo QR Code imediatamente
     setTimeout(() => {
       console.log('🔄 Reiniciando motor após logout manual para disponibilizar novo QR Code...');
       inicializarWhatsApp();
@@ -83,8 +119,6 @@ app.get('/', (req, res) => res.send('Servidor Ótica Luz Ativo com Baileys!'));
 app.listen(PORT, () => {
   console.log(`🚀 Servidor HTTP rodando na porta ${PORT}`);
   statusConexao = 'Iniciando motor...';
-  
-  // Inicialização imediata em background (Sem Puppeteer, não há risco de travar o HTTP server)
   inicializarWhatsApp();
 });
 
@@ -93,8 +127,6 @@ app.listen(PORT, () => {
 // ==========================================
 async function inicializarWhatsApp() {
   const tokenPath = path.resolve('/opt/render/project/src/server/tokens/otica-luz-session');
-  
-  // Define o diretório dos tokens de autenticação
   const { state, saveCreds } = await useMultiFileAuthState(tokenPath);
 
   try {
@@ -104,7 +136,6 @@ async function inicializarWhatsApp() {
       defaultQueryTimeoutMs: undefined,
     });
 
-    // Ouvinte de atualizações de conexão e geração de QR Code
     whatsappClient.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -119,19 +150,15 @@ async function inicializarWhatsApp() {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-        
-        // Se for deslogado (401), limpa os arquivos corrompidos para liberar o QR Code no próximo boot
         const foiDeslogado = statusCode === DisconnectReason.loggedOut || statusCode === 401;
         
         console.log(`Conexão fechada. Código: ${statusCode}. Foi deslogado? ${foiDeslogado}`);
-        
         statusConexao = 'Desconectado';
         qrCodeBase64 = null;
 
         if (foiDeslogado) {
           console.log('🧹 Forçando limpeza física do diretório de credenciais antigas...');
           try {
-            // 🔥 Remove de forma síncrona e forçada os arquivos corrompidos do disco do Render
             const fs = await import('fs');
             if (fs.existsSync(tokenPath)) {
               fs.rmSync(tokenPath, { recursive: true, force: true });
@@ -141,13 +168,11 @@ async function inicializarWhatsApp() {
             console.log('Erro ao remover arquivos via fs:', e.message);
           }
           
-          // Lança o boot limpo em seguida para gerar o QR Code na hora
           setTimeout(() => {
             console.log('🔄 Inicializando nova instância limpa para gerar o QR Code...');
             inicializarWhatsApp();
           }, 2000);
         } else {
-          // Se caiu por oscilação de rede comum, apenas tenta reconectar de forma leve
           inicializarWhatsApp();
         }
         
@@ -171,15 +196,11 @@ async function inicializarWhatsApp() {
   }
 }
 
-// Helper utilitário para formatar e enviar texto de forma limpa pelo Baileys
 async function enviarMensagemTexto(numeroComJid, texto) {
   if (!whatsappClient) throw new Error('Client Baileys não inicializado');
-  
-  // No Baileys, o envio de texto puro segue essa estrutura simplificada
   await whatsappClient.sendMessage(numeroComJid, { text: texto });
 }
 
-// Helper leve para verificar se o número possui WhatsApp ativo no ecossistema
 async function validarNumeroWhatsApp(numeroPuro) {
   try {
     const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
@@ -200,16 +221,19 @@ async function verificarAniversariantesDoDia() {
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
   
-  // Limpa a lista de controle se mudou o dia (meia-noite)
   if (diaAtualGerenciamento !== hojeDataCompleta) {
     console.log(`📆 Novo dia detectado (${hojeDataCompleta}). Resetando lista de envios.`);
     diaAtualGerenciamento = hojeDataCompleta;
-    clientesEnviadosHoje = []; // Esvazia a lista para o novo dia
+    clientesEnviadosHoje = []; 
   }
 
   console.log(`🔄 Rodando checagem de aniversariantes. Já enviados hoje: ${clientesEnviadosHoje.length}`);
   
   try {
+    // 🔥 BUSCA O MODELO DINÂMICO SALVO NO BANCO
+    const resConfig = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'msg_aniversario'");
+    const templateAniversario = resConfig.rows[0]?.valor || "Olá, {nome}! 🎉 Feliz Aniversário!";
+
     const resultado = await turso.transaction("read").then(async (tx) => {
       const res = await tx.execute(`
         SELECT id, nome, telefone FROM clientes 
@@ -219,18 +243,12 @@ async function verificarAniversariantesDoDia() {
       return res;
     });
     
-    if (resultado.rows.length === 0) {
-      return;
-    }
+    if (resultado.rows.length === 0) return;
     
     for (const cliente of resultado.rows) {
-      // 🔥 O SEGREDO: Em vez de ID, se sua tabela não tiver ID, use o 'telefone' como chave única
       const identificadorUnico = cliente.id || cliente.telefone; 
       
-      // Se esse cliente específico já recebeu a mensagem hoje, pula ele!
-      if (clientesEnviadosHoje.includes(identificadorUnico)) {
-        continue; 
-      }
+      if (clientesEnviadosHoje.includes(identificadorUnico)) continue; 
       
       const { nome, telefone } = cliente;
       if (!telefone) continue;
@@ -238,7 +256,8 @@ async function verificarAniversariantesDoDia() {
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
-      const message = `Olá, ${nome}! 🎉\n\nNós da *Ótica Luz* passamos para te desejar um feliz aniversário! 🎂✨\n\nQue o seu novo ciclo seja iluminado, cheio de saúde e muitas conquistas. Como presente, traga esta mensagem até a ótica durante o seu mês para retirar um brinde exclusivo! 🕶️💝`;
+      // 🔥 RECONSTRÓI A MENSAGEM TROCANDO A TAG {nome} PELO NOME DO CLIENTE
+      const message = templateAniversario.replace(/{nome}/g, nome);
       
       console.log(`🚀 Enviando para cliente novo do dia: ${nome} (${numeroPuro})`);
       let envioSucesso = false;
@@ -264,7 +283,6 @@ async function verificarAniversariantesDoDia() {
         }
       }
 
-      // Se enviou com sucesso (ou tentou todas as vias), coloca o cliente na lista de bloqueio de hoje
       if (envioSucesso) {
         clientesEnviadosHoje.push(identificadorUnico);
       }
@@ -277,25 +295,27 @@ async function verificarAniversariantesDoDia() {
 }
 
 // ==========================================
-// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA (INTELIGENTE)
+// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA (DINÂMICA)
 // ==========================================
 async function verificarPosVendaTrintaDias() {
   if (!whatsappClient || statusConexao !== 'Conectado') return;
 
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
   
-  // Limpa a lista de controle do pós-venda se mudou o dia (meia-noite)
   if (diaAtualPosVendaGerenciamento !== hojeDataCompleta) {
     console.log(`📆 Novo dia detectado para Pós-Venda (${hojeDataCompleta}). Resetando lista.`);
     diaAtualPosVendaGerenciamento = hojeDataCompleta;
-    posVendasEnviadosHoje = []; // Esvazia a lista de controle do pós-venda
+    posVendasEnviadosHoje = []; 
   }
 
   console.log(`🔄 Executando rotina de pós-venda. Já enviados hoje: ${posVendasEnviadosHoje.length}`);
   
   try {
+    // 🔥 BUSCA O MODELO DINÂMICO SALVO NO BANCO
+    const resConfig = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'msg_pos_venda'");
+    const templatePosVenda = resConfig.rows[0]?.valor || "Olá, {nome}! Obrigado por comprar o produto {produtos}.";
+
     const resultado = await turso.transaction("read").then(async (tx) => {
-      // 🔥 Adicionado 'v.id AS venda_id' para rastrear cada venda de forma única
       const res = await tx.execute(`
         SELECT v.id AS venda_id, c.nome, c.telefone, v.produtos 
         FROM vendas v
@@ -313,20 +333,18 @@ async function verificarPosVendaTrintaDias() {
     
     for (const venda of resultado.rows) {
       const { venda_id, nome, telefone, produtos } = venda;
-      
-      // 🔥 O SEGREDO: Se essa venda específica já recebeu o pós-venda hoje, pula ela!
-      // Se por acaso sua tabela de vendas não tiver ID, use o 'telefone' como fallback secundário.
       const identificadorVenda = venda_id || `${telefone}_${produtos}`;
-      if (posVendasEnviadosHoje.includes(identificadorVenda)) {
-        continue;
-      }
-      
+
+      if (posVendasEnviadosHoje.includes(identificadorVenda)) continue;
       if (!telefone) continue;
       
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
-      const message = `Olá, ${nome}! Tudo bem? 😊\n\nHá cerca de um mês você esteve aqui na *Ótica Luz* e levou seu(s) produto(s): *${produtos}*.\n\nPassamos para saber como está sendo a sua experiência! Os óculos estão confortáveis? Precisando de qualquer ajuste na armação ou limpeza das lentes, lembre-se que você tem assistência gratuita aqui na loja. 🕶️✨\n\nSua satisfação é muito importante para nós!`;
+      // 🔥 RECONSTRÓI A MENSAGEM SUBSTITUINDO AS TAGS DINÂMICAS {nome} E {produtos}
+      const message = templatePosVenda
+        .replace(/{nome}/g, nome)
+        .replace(/{produtos}/g, produtos);
       
       console.log(`🚀 Enviando pós-venda para cliente novo: ${nome} (${numeroPuro})`);
       let envioSucesso = false;
@@ -352,7 +370,6 @@ async function verificarPosVendaTrintaDias() {
         }
       }
       
-      // Se o envio foi feito, salva no histórico da memória para não repetir na próxima hora
       if (envioSucesso) {
         posVendasEnviadosHoje.push(identificadorVenda);
       }

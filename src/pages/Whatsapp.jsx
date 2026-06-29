@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { QrCode, RefreshCw, CheckCircle, XCircle, Loader2, AlertTriangle } from 'lucide-react';
+import { QrCode, RefreshCw, CheckCircle, XCircle, Loader2, AlertTriangle, MessageSquare, Save } from 'lucide-react';
 
 export default function WhatsappControl() {
   const [status, setStatus] = useState('Buscando...');
   const [qr, setQr] = useState(null);
   const [carregando, setCarregando] = useState(false);
+
+  // 🔥 NOVOS ESTADOS: Controle dos templates de mensagens editáveis
+  const [msgAniversario, setMsgAniversario] = useState('');
+  const [msgPosVenda, setMsgPosVenda] = useState('');
+  const [salvandoConfig, setSalvandoConfig] = useState(false);
 
   // ==========================================
   // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
@@ -31,15 +36,64 @@ export default function WhatsappControl() {
     }
   };
 
-  // Monitoramento ativo a cada 5 segundos
+  // 🔥 NOVA FUNÇÃO: Carrega as mensagens salvas no banco de dados do Turso
+  const carregarTemplatesMensagens = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/whatsapp/config-mensagens`);
+      const dados = await res.json();
+      setMsgAniversario(dados.msg_aniversario || '');
+      setMsgPosVenda(dados.msg_pos_venda || '');
+    } catch (error) {
+      console.error("Erro ao carregar templates de mensagens:", error);
+    }
+  };
+
+  // Monitoramento ativo e carregamento inicial
   useEffect(() => {
     checarStatusConexao();
+    carregarTemplatesMensagens();
     const intervalo = setInterval(checarStatusConexao, 5000);
     return () => clearInterval(intervalo);
   }, []);
 
+  // 🔥 NOVA FUNÇÃO: Envia os novos templates de texto para o Node.js
+  const handleSalvarMensagens = async (e) => {
+    e.preventDefault();
+    setSalvandoConfig(true);
+    try {
+      const res = await fetch(`${API_URL}/api/whatsapp/config-mensagens`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          msg_aniversario: msgAniversario,
+          msg_pos_venda: msgPosVenda
+        })
+      });
+      const resultado = await res.json();
+      if (resultado.success) {
+        setAlertaConfig({
+          aberto: true,
+          tipo: 'sucesso',
+          titulo: 'Templates Atualizados',
+          mensagem: 'Os novos modelos de automação foram salvos no banco de dados e aplicados!',
+          onConfirmar: null
+        });
+      }
+    } catch (error) {
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'erro',
+        titulo: 'Erro ao Salvar',
+        mensagem: 'Não foi possível atualizar as mensagens no servidor.',
+        onConfirmar: null
+      });
+    } finally {
+      setSalvandoConfig(false);
+    }
+  };
+
   // ==========================================
-  // DESCONEXÃO DO CONTEXTO (USANDO MODAL CUSTOM)
+  // DESCONEXÃO DO CONTEXTO
   // ==========================================
   const handleDesconectar = () => {
     setAlertaConfig({
@@ -74,7 +128,6 @@ export default function WhatsappControl() {
     });
   };
 
-  // 🔥 MAPEAMENTO ATUALIZADO E BLINDADO PARA O ECOSSISTEMA BAILEYS:
   const isConectado = status === 'Conectado' || status === 'open';
   const aguardandoQR = status === 'Aguardando Leitura do QR Code' || status === 'notLogged' || status === 'Desconectado' || status === 'close';
   const isVerificando = status === 'Buscando...' || status === 'Iniciando...' || status === 'Iniciando motor...' || status === 'connecting';
@@ -82,7 +135,7 @@ export default function WhatsappControl() {
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-xl mx-auto w-full overflow-hidden">
       
-      {/* CONTAINER DO PAINEL */}
+      {/* CONTAINER DO PAINEL DE CONEXÃO */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
         
         {/* CABEÇALHO DO PAINEL */}
@@ -160,10 +213,69 @@ export default function WhatsappControl() {
         </div>
       </div>
 
-      {/* 🔔 MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO DA ÓTICA LUZ */}
+      {/* 🔥 NOVO: CONTAINER DE CONFIGURAÇÃO DE MENSAGENS EDITÁVEIS */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
+        <div className="bg-slate-900 p-4 text-white font-bold border-b-4 border-gold flex items-center space-x-2 text-xs sm:text-sm">
+          <MessageSquare className="w-4 h-4 text-gold" />
+          <span>Personalizar Textos das Automações</span>
+        </div>
+        
+        <form onSubmit={handleSalvarMensagens} className="p-4 sm:p-6 space-y-5">
+          {/* TEMPLATE ANIVERSÁRIO */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center">
+              <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">Mensagem de Aniversário</label>
+              <span className="text-[10px] bg-royalBlue/10 text-royalBlue px-2 py-0.5 rounded font-mono font-bold">Tag: {"{nome}"}</span>
+            </div>
+            <textarea
+              rows="4"
+              value={msgAniversario}
+              onChange={(e) => setMsgAniversario(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg p-3 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white font-normal text-slate-700 leading-relaxed resize-none"
+              placeholder="Escreva a mensagem de parabéns..."
+              required
+            />
+          </div>
+
+          {/* TEMPLATE PÓS-VENDA */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center">
+              <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">Mensagem de Pós-Venda (30 dias)</label>
+              <div className="flex space-x-1">
+                <span className="text-[10px] bg-royalBlue/10 text-royalBlue px-1.5 py-0.5 rounded font-mono font-bold">{"{nome}"}</span>
+                <span className="text-[10px] bg-gold/20 text-gold-dark px-1.5 py-0.5 rounded font-mono font-bold">{"{produtos}"}</span>
+              </div>
+            </div>
+            <textarea
+              rows="4"
+              value={msgPosVenda}
+              onChange={(e) => setMsgPosVenda(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg p-3 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white font-normal text-slate-700 leading-relaxed resize-none"
+              placeholder="Escreva a mensagem de acompanhamento pós-venda..."
+              required
+            />
+          </div>
+
+          {/* BOTÃO DE SALVAR MODELOS */}
+          <button
+            type="submit"
+            disabled={salvandoConfig}
+            className="w-full bg-royalBlue hover:bg-royalBlue-light text-white font-bold py-2.5 rounded-lg text-xs sm:text-sm shadow transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 h-10 border-b-2 border-gold active:scale-[0.99]"
+          >
+            {salvandoConfig ? <Loader2 className="w-4 h-4 animate-spin" /> : (
+              <>
+                <Save className="w-4 h-4 text-gold" />
+                <span>Salvar Templates de Mensagem</span>
+              </>
+            )}
+          </button>
+        </form>
+      </div>
+
+      {/* MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO */}
       {alertaConfig.aberto && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold animate-scaleIn">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
             <div className="p-5 space-y-4">
               <div className="flex items-start space-x-3">
                 <div className={`p-2 rounded-xl shrink-0 ${
