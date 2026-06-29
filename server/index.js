@@ -50,7 +50,11 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
-// 🔔 ROTA GET UNIFICADA E BLINDADA: Busca as mensagens configuradas
+// ==========================================
+// ROTAS DE CONFIGURAÇÃO DE MENSAGENS (SOLUÇÃO DEFINITIVA)
+// ==========================================
+
+// 🔔 ROTA GET: Carrega os dados tratando de forma direta o retorno das linhas
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const configs = {
@@ -58,53 +62,62 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
       msg_pos_venda: ''
     };
 
+    // Chamada direta sem amarras contábeis do SDK
     const r = await turso.execute("SELECT chave, valor FROM configuracoes");
     
-    if (r && r.rows && Array.isArray(r.rows)) {
-      for (const row of r.rows) {
-        const chave = row.chave !== undefined ? row.chave : (row[0] !== undefined ? row[0] : null);
-        const valor = row.valor !== undefined ? row.valor : (row[1] !== undefined ? row[1] : '');
-        
+    if (r && r.rows) {
+      r.rows.forEach(row => {
+        const chave = row.chave !== undefined ? row.chave : row[0];
+        const valor = row.valor !== undefined ? row.valor : row[1];
         if (chave) {
           configs[chave] = valor;
         }
-      }
+      });
     }
 
     res.json({
-      msg_aniversario: configs.msg_aniversario || '',
-      msg_pos_venda: configs.msg_pos_venda || ''
+      msg_aniversario: configs.msg_aniversario,
+      msg_pos_venda: configs.msg_pos_venda
     });
 
   } catch (error) {
-    console.error('❌ [ERRO] Falha na rota GET config-mensagens:', error);
+    console.error('⚠️ [Aviso GET] Falha ao ler banco (retornando campos limpos):', error.message);
+    // Retorna vazio em vez de estourar erro 500 no console do navegador
     res.json({ msg_aniversario: '', msg_pos_venda: '' });
   }
 });
 
-// 🔔 ROTA POST INJETADA: Salva os novos templates sem quebrar o batch do Libsql (sem ";")
+// 🔔 ROTA POST: Remove o uso do .batch() para impedir o disparo de rotinas de migração do SDK
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
-  const { msg_aniversario, msg_pos_venda } = req.body;
-  
-  const textoAniversario = typeof msg_aniversario === 'string' ? msg_aniversario : '';
-  const textoPosVenda = typeof msg_pos_venda === 'string' ? msg_pos_venda : '';
-
   try {
-    await turso.batch([
-      {
-        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
-        args: [textoAniversario]
-      },
-      {
-        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
-        args: [textoPosVenda]
-      }
-    ]);
+    const { msg_aniversario, msg_pos_venda } = req.body;
+    
+    const textoAniversario = String(msg_aniversario || '').trim();
+    const textoPosVenda = String(msg_pos_venda || '').trim();
 
+    console.log('📝 Gravando templates de mensagens de forma direta...');
+
+    // 🔥 A MUDANÇA OPERACIONAL: Executa de forma sequencial isolada em vez de .batch()
+    // Isso ignora por completo a validação remota que gerava o erro 400/500
+    await turso.execute({
+      sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
+      args: [textoAniversario]
+    });
+
+    await turso.execute({
+      sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
+      args: [textoPosVenda]
+    });
+
+    console.log('✅ Gravação concluída com sucesso!');
     res.json({ success: true, message: 'Modelos de mensagens salvos com sucesso!' });
+
   } catch (error) {
-    console.error("❌ [ERRO] Falha na rota POST config-mensagens:", error);
-    res.status(500).json({ error: 'Erro ao salvar configurações no Turso: ' + error.message });
+    console.error("❌ [ERRO CRÍTICO NO POST] Falha ao salvar no Turso:", error);
+    res.status(500).json({ 
+      error: 'Erro interno ao salvar configurações', 
+      detalhes: error.message 
+    });
   }
 });
 
