@@ -26,7 +26,8 @@ const PORT = process.env.PORT || 8080;
 const turso = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
-  introspect: "disabled"
+  disableMigrations: true, // Desativa em versões anteriores do driver
+  introspect: "disabled"   // Desativa em versões recentes do driver
 });
 
 let ultimaDataPosVenda = null;
