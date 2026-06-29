@@ -67,22 +67,60 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   }
 });
 
-// 🔔 NOVA ROTA: Atualizar os modelos de mensagens vindos do React
+// ==========================================
+// ROTAS DE CONFIGURAÇÃO DE MENSAGENS (BLINDADAS)
+// ==========================================
+
+// 🔔 ROTA GET: Busca e garante o mapeamento correto das linhas do Turso
+app.get('/api/whatsapp/config-mensagens', async (req, res) => {
+  try {
+    const r = await turso.execute("SELECT chave, valor FROM configuracoes");
+    const configs = {};
+    
+    if (r && r.rows) {
+      r.rows.forEach(row => {
+        // Suporta tanto acesso por propriedade (.chave) quanto por índice caso mude a versão do driver
+        const chave = row.chave || row[0];
+        const valor = row.valor || row[1];
+        if (chave) {
+          configs[chave] = valor;
+        }
+      });
+    }
+
+    res.json({
+      msg_aniversario: configs.msg_aniversario || '',
+      msg_pos_venda: configs.msg_pos_venda || ''
+    });
+  } catch (error) {
+    console.error('Erro na rota GET config-mensagens:', error);
+    res.status(500).json({ error: 'Erro ao buscar configurações no Turso: ' + error.message });
+  }
+});
+
+// 🔔 ROTA POST: Trata valores nulos/undefined e limpa o texto antes de salvar
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   const { msg_aniversario, msg_pos_venda } = req.body;
+  
+  // Garante que o conteúdo seja uma string limpa e não quebre o banco
+  const textoAniversario = typeof msg_aniversario === 'string' ? msg_aniversario : '';
+  const textoPosVenda = typeof msg_pos_venda === 'string' ? msg_pos_venda : '';
+
   try {
     await turso.batch([
       {
-        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
-        args: [msg_aniversario]
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?);",
+        args: [textoAniversario]
       },
       {
-        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
-        args: [msg_pos_venda]
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?);",
+        args: [textoPosVenda]
       }
     ]);
+
     res.json({ success: true, message: 'Modelos de mensagens salvos com sucesso!' });
   } catch (error) {
+    console.error("Erro na rota POST config-mensagens:", error);
     res.status(500).json({ error: 'Erro ao salvar configurações no Turso: ' + error.message });
   }
 });
