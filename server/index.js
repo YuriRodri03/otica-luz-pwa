@@ -98,30 +98,45 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   }
 });
 
-// 🔔 ROTA POST: Trata valores nulos/undefined e limpa o texto antes de salvar
-app.post('/api/whatsapp/config-mensagens', async (req, res) => {
-  const { msg_aniversario, msg_pos_venda } = req.body;
-  
-  // Garante que o conteúdo seja uma string limpa e não quebre o banco
-  const textoAniversario = typeof msg_aniversario === 'string' ? msg_aniversario : '';
-  const textoPosVenda = typeof msg_pos_venda === 'string' ? msg_pos_venda : '';
-
+// 🔔 ROTA GET: Busca e garante o mapeamento correto das linhas do Turso sem travar o motor
+app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
-    await turso.batch([
-      {
-        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?);",
-        args: [textoAniversario]
-      },
-      {
-        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?);",
-        args: [textoPosVenda]
-      }
-    ]);
+    // Inicializa o objeto com os fallbacks vazios padrão
+    const configs = {
+      msg_aniversario: '',
+      msg_pos_venda: ''
+    };
 
-    res.json({ success: true, message: 'Modelos de mensagens salvos com sucesso!' });
+    const r = await turso.execute("SELECT chave, valor FROM configuracoes");
+    
+    // Se a tabela existir e retornar dados, processa com segurança
+    if (r && r.rows && Array.isArray(r.rows)) {
+      for (const row of r.rows) {
+        // Blinda contra qualquer variação de propriedade ou índice do driver do Turso
+        const chave = row.chave !== undefined ? row.chave : (row[0] !== undefined ? row[0] : null);
+        const valor = row.valor !== undefined ? row.valor : (row[1] !== undefined ? row[1] : '');
+        
+        if (chave) {
+          configs[chave] = valor;
+        }
+      }
+    }
+
+    // Retorna sempre um JSON estruturado para o React não dar crash
+    res.json({
+      msg_aniversario: configs.msg_aniversario || '',
+      msg_pos_venda: configs.msg_pos_venda || ''
+    });
+
   } catch (error) {
-    console.error("Erro na rota POST config-mensagens:", error);
-    res.status(500).json({ error: 'Erro ao salvar configurações no Turso: ' + error.message });
+    // 🔥 Captura no console do Render o motivo exato (ex: tabela bloqueada, coluna inválida)
+    console.error('❌ [ERRO CRÍTICO] Falha na rota GET config-mensagens:', error);
+    
+    // Fallback amigável: em vez de estourar 500, manda vazio para o React renderizar as caixas limpas para digitação
+    res.json({
+      msg_aniversario: '',
+      msg_pos_venda: ''
+    });
   }
 });
 
