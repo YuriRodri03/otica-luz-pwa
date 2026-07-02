@@ -105,27 +105,22 @@ export default function Crediario() {
       mensagem: `Deseja homologar o recebimento no valor de R$ ${item.valorParcela.toFixed(2)} referente à parcela ${item.parcelaNumero} do cliente ${item.cliente}?`,
       onConfirmar: async (dataEscolhida) => {
         try {
-          await turso.execute({
-            sql: "UPDATE parcelas_carne SET status = 'Pago' WHERE id = ?",
-            args: [parseInt(item.idUnique)]
-          })
-
-          const descricaoAuditoria = `[Baixa de Carnê] Parcela ${item.parcelaNumero} - Cliente: ${item.cliente} (CPF: ${item.cpf}) | RefChave: ${item.idVendaOrigem}_${item.parcelaNumero.split('/')[0]}`
-
-          // Salva o lançamento utilizando a data escolhida no input (em formato ISO completo ou a data pura)
-          const dataInjecao = dataEscolhida ? new Date(dataEscolhida + 'T12:00:00').toISOString() : new Date().toISOString()
+          // 🔥 CORREÇÃO: Passando a data escolhida para a coluna 'pago_em', 
+          // garantindo que os relatórios anuais e o dashboard capturem a entrada perfeitamente!
+          const dataInjecao = dataEscolhida || new Date().toISOString().split('T')[0];
 
           await turso.execute({
-            sql: "INSERT INTO lancamentos (descricao, tipo, valor, metodo, data) VALUES (?, ?, ?, ?, ?)",
-            args: [descricaoAuditoria, 'entrada', item.valorParcela, 'Dinheiro', dataInjecao]
+            sql: "UPDATE parcelas_carne SET status = 'Pago', pago_em = ? WHERE id = ?",
+            args: [dataInjecao, parseInt(item.idUnique)]
           })
 
           await carregarCrediarioDoBanco()
+          
           setAlertaConfig({
             aberto: true,
             tipo: 'sucesso',
             titulo: 'Liquidado!',
-            mensagem: 'O pagamento foi registrado no carnê e o fluxo de caixa foi atualizado.',
+            mensagem: 'O pagamento foi registrado no carnê com sucesso.',
             onConfirmar: null
           })
         } catch (error) {
