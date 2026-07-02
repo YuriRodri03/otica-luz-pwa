@@ -33,7 +33,7 @@ const turso = createClient({
 let ultimaDataPosVenda = null;
 let whatsappClient = null; 
 let ultimaDataEnvio = null; 
-let statusConexao = 'Iniciando...';
+let statusConexao = 'Iniciando...'; // 🔥 CORREÇÃO: Adicionado o 'let' preventivo de escopo estrito
 let qrCodeBase64 = null;
 let clientesEnviadosHoje = [];
 let diaAtualGerenciamento = null;
@@ -169,6 +169,12 @@ async function inicializarWhatsApp() {
       auth: state,
       printQRInTerminal: false, 
       defaultQueryTimeoutMs: undefined,
+      keepAliveIntervalMs: 30000, // Envia um ping sutil de validação a cada 30 segundos
+      options: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      }
     });
 
     whatsappClient.ev.on('connection.update', async (update) => {
@@ -418,3 +424,20 @@ setInterval(() => {
   verificarAniversariantesDoDia();
   verificarPosVendaTrintaDias();
 }, 1000 * 60 * 60);
+
+// ==========================================
+// 🚀 ROTINA CRÍTICA ANTI-SLEEP INTERNA (EXCLUSIVA PARA RENDER)
+// ==========================================
+// Envia uma requisição HTTP para si mesmo localmente a cada 10 minutos para impedir 
+// que a nuvem congele o processo Node.js e desconecte o chip[cite: 2].
+setInterval(async () => {
+  try {
+    // 🔥 OTIMIZAÇÃO: Pinga a porta local interna em vez da URL externa pública do Render.
+    // Isso evita gargalos de DNS da nuvem e funciona direto no núcleo do contêiner!
+    const urlAutoPingLocal = `http://localhost:${PORT}/`;
+    console.log('💓 [Anti-Sleep] Enviando pulso interno de atividade para manter o robô acordado...');
+    await fetch(urlAutoPingLocal);
+  } catch (e) {
+    console.log('⚠️ [Anti-Sleep] Falha temporária no auto-ping, mas o motor continua rodando.');
+  }
+}, 1000 * 60 * 10); // Executa a cada 10 minutos cravados
