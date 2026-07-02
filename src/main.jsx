@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import './index.css'
 import { turso } from './tursoClient' 
 import { Loader2, ShieldCheck } from 'lucide-react'
@@ -30,19 +30,35 @@ function PainelInterno({
   setLancamentos, 
   carregando 
 }) {
-  // Controle da tela visível por estado para evitar perda de inputs
-  const [telaAtiva, setTelaAtiva] = useState('dashboard')
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // Sincroniza a string amigável para enviar ao Sidebar caso ele use a prop telaAtiva
+  const mapearRotaParaTela = () => {
+    const path = location.pathname
+    if (path === '/') return 'dashboard'
+    return path.replace('/', '')
+  }
+
+  // Função substituta para o Sidebar continuar mudando as telas normalmente
+  const setTelaAtiva = (novaTela) => {
+    if (novaTela === 'dashboard') {
+      navigate('/')
+    } else {
+      navigate(`/${novaTela}`)
+    }
+  }
 
   return (
     <div className="flex bg-slate-50 min-h-screen relative overflow-hidden">
       
-      {/* EFEITO DE BRILHO FLUIDO NO BACKGROUND (CORRIGIDO PARA EVITAR PULOS) */}
+      {/* EFEITO DE BRILHO FLUIDO NO BACKGROUND */}
       <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vh] rounded-full bg-gradient-to-br from-gold/10 to-transparent blur-[120px] pointer-events-none animate-pulse duration-[6000ms]" />
       <div className="absolute bottom-[-10%] right-[-5%] w-[45vw] h-[45vh] rounded-full bg-gradient-to-tl from-royalBlue/5 to-transparent blur-[100px] pointer-events-none animate-pulse duration-[8000ms]" />
       <div className="absolute top-[30%] right-[20%] w-[15vw] h-[15vh] rounded-full bg-gold/5 blur-[60px] pointer-events-none animate-pulse duration-[4000ms]" />
 
-      {/* Menu Lateral Fixo */}
-      <Sidebar className="relative z-10" telaAtiva={telaAtiva} setTelaAtiva={setTelaAtiva} />
+      {/* Menu Lateral Adaptado para ler a URL real */}
+      <Sidebar className="relative z-10" telaAtiva={mapearRotaParaTela()} setTelaAtiva={setTelaAtiva} />
       
       {/* Bloco de Conteúdo da Direita */}
       <div className="flex-1 flex flex-col min-w-0 relative z-10">
@@ -56,25 +72,16 @@ function PainelInterno({
             </div>
           )}
           
-          {/* Renderização condicional injetando os gatilhos mutáveis do banco de dados */}
-          <div className={telaAtiva === 'dashboard' ? 'block' : 'hidden'}>
-            <Dashboard lancamentos={lancamentos} clientes={clientes} />
-          </div>
-          <div className={telaAtiva === 'fluxo' ? 'block' : 'hidden'}>
-            <FluxoCaixa lancamentos={lancamentos} setLancamentos={setLancamentos} clientes={clientes} carregarLancamentosDoBanco={carregarDadosIniciais} />
-          </div>
-          <div className={telaAtiva === 'crediario' ? 'block' : 'hidden'}>
-            <Crediario crediarios={crediarios} setCrediarios={setCrediarios} lancamentos={lancamentos} setLancamentos={setLancamentos} atualizarDados={carregarDadosIniciais} />
-          </div>
-          <div className={telaAtiva === 'clientes' ? 'block' : 'hidden'}>
-            <Clientes clientes={clientes} setClientes={setClientes} atualizarClientesDoBanco={carregarDadosIniciais} />
-          </div>
-          <div className={telaAtiva === 'usuarios' ? 'block' : 'hidden'}>
-            <Usuarios />
-          </div>
-          <div className={telaAtiva === 'whatsapp' ? 'block' : 'hidden'}>
-            <Whatsapp />
-          </div>
+          {/* 🔥 AGORA USANDO ROTAS REAIS: Dados limpos e ciclo de vida reativo */}
+          <Routes>
+            <Route path="/" element={<Dashboard lancamentos={lancamentos} clientes={clientes} />} />
+            <Route path="/fluxo" element={<FluxoCaixa lancamentos={lancamentos} setLancamentos={setLancamentos} clientes={clientes} carregarLancamentosDoBanco={carregarDadosIniciais} />} />
+            <Route path="/crediario" element={<Crediario crediarios={crediarios} setCrediarios={setCrediarios} lancamentos={lancamentos} setLancamentos={setLancamentos} atualizarDados={carregarDadosIniciais} />} />
+            <Route path="/clientes" element={<Clientes clientes={clientes} setClientes={setClientes} atualizarClientesDoBanco={carregarDadosIniciais} />} />
+            <Route path="/usuarios" element={<Usuarios />} />
+            <Route path="/whatsapp" element={<Whatsapp />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         </main>
       </div>
     </div>
@@ -118,7 +125,6 @@ function App() {
     }
   }, [usuarioLogado])
 
-  // Loader restrito estritamente ao carregamento inicial para evitar travar a tela nas edições internas
   if (usuarioLogado && carregando && clientes.length === 0) {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center bg-slate-900 text-white z-[9999]">
