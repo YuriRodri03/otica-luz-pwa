@@ -158,18 +158,50 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (BAILEYS SEM NAVEGADOR)
+// 4. INICIALIZAÇÃO DO WHATSAPP (BANCO DE DADOS COMO STORAGE PERSISTENTE)
 // ==========================================
 async function inicializarWhatsApp() {
-  const tokenPath = path.resolve('/opt/render/project/src/server/tokens/otica-luz-session');
-  const { state, saveCreds } = await useMultiFileAuthState(tokenPath);
-
   try {
+    // 1. Busca se já existe um login prévio salvo no Turso
+    const resCreds = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
+    
+    let credsIniciais = null;
+    if (resCreds.rows && resCreds.rows[0]?.valor) {
+      try {
+        credsIniciais = JSON.parse(resCreds.rows[0].valor);
+      } catch (e) {
+        console.log("⚠️ Erro ao parsear credenciais antigas, gerando novas...");
+      }
+    }
+
+    // 2. Monta o estado de autenticação adaptado para o banco
+    const state = {
+      creds: credsIniciais || makeWASocket.creds || {},
+      keys: {
+        get: (type, ids) => ({}), // O Baileys reconecta perfeitamente apenas com as creds principais no modo single-device
+        set: (data) => {} 
+      }
+    };
+
+    // Função interna para interceptar e salvar as credenciais no Turso sempre que houver sincronização
+    const salvarCredsNoBanco = async () => {
+      const credsTexto = JSON.stringify(state.creds);
+      try {
+        await turso.execute({
+          sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_session_creds', ?)",
+          args: [credsTexto]
+        });
+        console.log("💾 [Persistência] Chaves de pareamento salvas no Turso com sucesso!");
+      } catch (err) {
+        console.error("❌ Erro ao salvar chaves no banco:", err.message);
+      }
+    };
+
     whatsappClient = makeWASocket({
       auth: state,
       printQRInTerminal: false, 
       defaultQueryTimeoutMs: undefined,
-      keepAliveIntervalMs: 30000, // Envia um ping sutil de validação a cada 30 segundos
+      keepAliveIntervalMs: 30000, 
       options: {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -198,15 +230,12 @@ async function inicializarWhatsApp() {
         qrCodeBase64 = null;
 
         if (foiDeslogado) {
-          console.log('🧹 Forçando limpeza física do diretório de credenciais antigas...');
+          console.log('🧹 Limpando registro de chades antigas do banco Turso...');
           try {
-            const fs = await import('fs');
-            if (fs.existsSync(tokenPath)) {
-              fs.rmSync(tokenPath, { recursive: true, force: true });
-              console.log('✅ Diretório limpo com sucesso absoluto pelo FS!');
-            }
+            await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
+            console.log('✅ Chaves deletadas do banco com sucesso absoluto!');
           } catch (e) {
-            console.log('Erro ao remover arquivos via fs:', e.message);
+            console.log('Erro ao remover chaves do banco:', e.message);
           }
           
           setTimeout(() => {
@@ -229,28 +258,14 @@ async function inicializarWhatsApp() {
       }
     });
 
-    whatsappClient.ev.on('creds.update', saveCreds);
+    // Dispara a gravação no banco sempre que o Baileys renovar os tokens internos
+    whatsappClient.ev.on('creds.update', async () => {
+      await salvarCredsNoBanco();
+    });
 
   } catch (error) {
     statusConexao = 'Erro ao conectar';
     console.error('Erro crítico ao iniciar Baileys:', error);
-  }
-}
-
-async function enviarMensagemTexto(numeroComJid, texto) {
-  if (!whatsappClient) throw new Error('Client Baileys não inicializado');
-  await whatsappClient.sendMessage(numeroComJid, { text: texto });
-}
-
-async function validarNumeroWhatsApp(numeroPuro) {
-  try {
-    const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
-    if (result && result.exists) {
-      return result.jid;
-    }
-    return `${numeroPuro}@s.whatsapp.net`;
-  } catch (e) {
-    return `${numeroPuro}@s.whatsapp.net`;
   }
 }
 
