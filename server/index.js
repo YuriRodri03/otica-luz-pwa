@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors'; 
 import { createClient } from '@libsql/client';
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import dotenv from 'dotenv';
 import path from 'path';
