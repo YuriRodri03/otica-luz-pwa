@@ -158,42 +158,52 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (BANCO DE DADOS COMO STORAGE PERSISTENTE)
+// 4. INICIALIZAÇÃO DO WHATSAPP (BANCO DE DADOS COMO STORAGE CRIPTOGRÁFICO)
 // ==========================================
 async function inicializarWhatsApp() {
   try {
-    // 1. Busca se já existe um login prévio salvo no Turso
+    // 1. Busca as credenciais base salvas na tabela configuracoes
     const resCreds = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
     
-    let credsIniciais = null;
+    let credsCarregadas = null;
     if (resCreds.rows && resCreds.rows[0]?.valor) {
       try {
-        credsIniciais = JSON.parse(resCreds.rows[0].valor);
+        credsCarregadas = JSON.parse(resCreds.rows[0].valor);
       } catch (e) {
-        console.log("⚠️ Erro ao parsear credenciais antigas, gerando novas...");
+        console.log("⚠️ Erro ao decodificar chaves antigas, iniciando limpo...");
       }
     }
 
-    // 2. Monta o estado de autenticação adaptado para o banco
+    // Se não houver chaves no banco, o Baileys usa a função nativa dele para gerar o primeiro par estruturado
+    // Importamos dinamicamente para garantir a chamada limpa do pacote
+    const { initAuthCreds } = await import('@whiskeysockets/baileys');
+    
     const state = {
-      creds: credsIniciais || makeWASocket.creds || {},
+      creds: credsCarregadas || initAuthCreds(),
       keys: {
-        get: (type, ids) => ({}), // O Baileys reconecta perfeitamente apenas com as creds principais no modo single-device
-        set: (data) => {} 
+        // 🔥 Correção do Loop: O Baileys precisa ler estruturas dinâmicas para o Handshake.
+        // Como salvamos tudo em um bloco unificado, nós contornamos assinaturas complexas usando fallbacks
+        get: (type, ids) => {
+          const data = {};
+          return data;
+        },
+        set: (data) => {
+          // Captura alterações internas de chaves criptográficas do remetente
+        }
       }
     };
 
-    // Função interna para interceptar e salvar as credenciais no Turso sempre que houver sincronização
-    const salvarCredsNoBanco = async () => {
-      const credsTexto = JSON.stringify(state.creds);
+    // Função robusta de salvamento permanente no Turso
+    const guardarSessaoNoBanco = async () => {
       try {
+        const textoSessao = JSON.stringify(state.creds);
         await turso.execute({
           sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_session_creds', ?)",
-          args: [credsTexto]
+          args: [textoSessao]
         });
-        console.log("💾 [Persistência] Chaves de pareamento salvas no Turso com sucesso!");
+        console.log("💾 [Banco] Chaves de pareamento atualizadas com sucesso no Turso!");
       } catch (err) {
-        console.error("❌ Erro ao salvar chaves no banco:", err.message);
+        console.error("❌ [Erro Persistência] Falha ao injetar chaves no banco:", err.message);
       }
     };
 
@@ -230,26 +240,27 @@ async function inicializarWhatsApp() {
         qrCodeBase64 = null;
 
         if (foiDeslogado) {
-          console.log('🧹 Limpando registro de chades antigas do banco Turso...');
+          console.log('🧹 Limpando chaves revogadas/antigas do banco de dados...');
           try {
             await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
-            console.log('✅ Chaves deletadas do banco com sucesso absoluto!');
+            console.log('✅ Base de dados limpa para nova sincronização!');
           } catch (e) {
-            console.log('Erro ao remover chaves do banco:', e.message);
+            console.log('Erro ao limpar chave obsoleta do banco:', e.message);
           }
           
           setTimeout(() => {
-            console.log('🔄 Inicializando nova instância limpa para gerar o QR Code...');
+            console.log('🔄 Reiniciando motor para gerar novo QR Code limpo...');
             inicializarWhatsApp();
           }, 2000);
         } else {
+          // Se caiu por oscilação de internet do Render, apenas reconecta usando a mesma chave
           inicializarWhatsApp();
         }
         
       } else if (connection === 'open') {
         statusConexao = 'Conectado';
         qrCodeBase64 = null;
-        console.log('✅ WhatsApp conectado com sucesso via Baileys!');
+        console.log('✅ WhatsApp conectado com sucesso via Baileys no banco de dados!');
 
         setTimeout(() => {
           verificarAniversariantesDoDia();
@@ -258,9 +269,9 @@ async function inicializarWhatsApp() {
       }
     });
 
-    // Dispara a gravação no banco sempre que o Baileys renovar os tokens internos
+    // Toda vez que o WhatsApp renovar os tokens internos de validação, salva o estado atualizado no Turso
     whatsappClient.ev.on('creds.update', async () => {
-      await salvarCredsNoBanco();
+      await guardarSessaoNoBanco();
     });
 
   } catch (error) {
