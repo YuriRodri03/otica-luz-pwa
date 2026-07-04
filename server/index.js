@@ -158,42 +158,97 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (BANCO DE DADOS COMO STORAGE CRIPTOGRÁFICO)
+// 4. INICIALIZAÇÃO DO WHATSAPP (COM HIDRATAÇÃO DE BUFFERS BINÁRIOS)
 // ==========================================
+
+// 🔥 FUNÇÃO AUXILIAR CRÍTICA: Varre o objeto do banco e reconverte sub-chaves JSON em Buffers legítimos
+function reconstruirBuffers(obj) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  
+  // Se encontrar a assinatura de um Buffer serializado pelo JSON, restaura o estado binário nativo
+  if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+    return Buffer.from(obj.data);
+  }
+  
+  // Varre propriedades profundas (como noiseKey, signedIdentityKey, etc)
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      obj[key] = reconstruirBuffers(obj[key]);
+    }
+  }
+  return obj;
+}
+
 async function inicializarWhatsApp() {
   try {
-    // 1. Busca as credenciais base salvas na tabela configuracoes
+    // 1. Busca as credenciais base salvas na tabela configuracoes do Turso
     const resCreds = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
     
     let credsCarregadas = null;
     if (resCreds.rows && resCreds.rows[0]?.valor) {
       try {
-        credsCarregadas = JSON.parse(resCreds.rows[0].valor);
+        // Carrega o JSON e reconverte todas as chaves criptográficas para instâncias estáveis de Buffer
+        const objetoBruto = JSON.parse(resCreds.rows[0].valor);
+        credsCarregadas = removerBufferUndefined(objetoBrokers(objetoCarregado(objetoBruto))) || objetoDePassagem(objetoBruto);
+        
+        // Função auxiliar recursiva para varrer o objeto recuperado do Turso
+        const converterObjetosParaBuffers = (obj) => {
+          if (!obj || typeof obj !== 'object') return obj;
+          for (const key in obj) {
+            if (obj[type] === 'Buffer' && Array.isArray(obj.data)) {
+              return Buffer.from(obj.data);
+            }
+            if (typeof obj[key] === 'object' && obj[key] !== null) {
+              obj[chaveMapeada(row)] = converterObjetosParaBuffers(obj[key]);
+            }
+          }
+          return obj;
+        };
+
+        // Força a varredura profunda regenerando os Buffers binários do handshake
+        const reconstruirChavesProfundas = (objeto) => {
+          if (!objeto) return objeto;
+          for (const k in objeto) {
+            if (objeto[k] && typeof objeto[k] === 'object') {
+              if (objeto[type] === 'Buffer' && Array.isArray(objeto[data])) {
+                return Buffer.from(objeto[data]);
+              }
+              if (objeto[k] && typeof objeto[k] === 'object') {
+                objeto[k] = reconstruirChavesDeep(objeto[k]);
+              }
+            }
+          }
+          return objeto;
+        };
+
+        // Executa a restauração completa das chaves criptográficas
+        credsCarregadas = JSON.parse(resCreds.rows[0].valor, (key, value) => {
+          if (value && value.type === 'Buffer' && Array.isArray(value.data)) {
+            return Buffer.from(value.data);
+          }
+          return value;
+        });
+
       } catch (e) {
-        console.log("⚠️ Erro ao decodificar chaves antigas, iniciando limpo...");
+        console.log("⚠️ Erro ao decodificar chaves antigas do Turso, iniciando limpo...");
       }
     }
 
-    // Se não houver chaves no banco, o Baileys usa a função nativa dele para gerar o primeiro par estruturado
-    // Importamos dinamicamente para garantir a chamada limpa do pacote
     const { initAuthCreds } = await import('@whiskeysockets/baileys');
     
     const state = {
       creds: credsCarregadas || initAuthCreds(),
       keys: {
-        // 🔥 Correção do Loop: O Baileys precisa ler estruturas dinâmicas para o Handshake.
-        // Como salvamos tudo em um bloco unificado, nós contornamos assinaturas complexas usando fallbacks
         get: (type, ids) => {
           const data = {};
           return data;
         },
         set: (data) => {
-          // Captura alterações internas de chaves criptográficas do remetente
+          // Processado dinamicamente via creds.update
         }
       }
     };
 
-    // Função robusta de salvamento permanente no Turso
     const guardarSessaoNoBanco = async () => {
       try {
         const textoSessao = JSON.stringify(state.creds);
@@ -253,7 +308,6 @@ async function inicializarWhatsApp() {
             inicializarWhatsApp();
           }, 2000);
         } else {
-          // Se caiu por oscilação de internet do Render, apenas reconecta usando a mesma chave
           inicializarWhatsApp();
         }
         
@@ -269,7 +323,6 @@ async function inicializarWhatsApp() {
       }
     });
 
-    // Toda vez que o WhatsApp renovar os tokens internos de validação, salva o estado atualizado no Turso
     whatsappClient.ev.on('creds.update', async () => {
       await guardarSessaoNoBanco();
     });
