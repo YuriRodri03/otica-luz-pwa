@@ -4,7 +4,6 @@ import { createClient } from '@libsql/client';
 import makeWASocket, { DisconnectReason } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import dotenv from 'dotenv';
-import path from 'path';
 
 dotenv.config();
 
@@ -26,14 +25,12 @@ const PORT = process.env.PORT || 8080;
 const turso = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
-  disableMigrations: true, // Desativa em versões anteriores do driver
-  introspect: "disabled"   // Desativa em versões recentes do driver
+  disableMigrations: true, 
+  introspect: "disabled"   
 });
 
-let ultimaDataPosVenda = null;
 let whatsappClient = null; 
-let ultimaDataEnvio = null; 
-let statusConexao = 'Iniciando...'; // 🔥 CORREÇÃO: Adicionado o 'let' preventivo de escopo estrito
+let statusConexao = 'Iniciando...'; 
 let qrCodeBase64 = null;
 let clientesEnviadosHoje = [];
 let diaAtualGerenciamento = null;
@@ -51,163 +48,135 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
-// ==========================================
-// ROTAS DE CONFIGURAÇÃO DE MENSAGENS (SOLUÇÃO DEFINITIVA)
-// ==========================================
-
-// 🔔 ROTA GET: Carrega os dados tratando de forma direta o retorno das linhas
+// Carrega os dados tratando de forma direta o retorno das linhas
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
-    const configs = {
-      msg_aniversario: '',
-      msg_pos_venda: ''
-    };
-
-    // Chamada direta sem amarras contábeis do SDK
+    const configs = { msg_aniversario: '', msg_pos_venda: '' };
     const r = await turso.execute("SELECT chave, valor FROM configuracoes");
     
     if (r && r.rows) {
       r.rows.forEach(row => {
         const chave = row.chave !== undefined ? row.chave : row[0];
         const valor = row.valor !== undefined ? row.valor : row[1];
-        if (chave) {
-          configs[chave] = valor;
-        }
+        if (chave) configs[chave] = valor;
       });
     }
-
-    res.json({
-      msg_aniversario: configs.msg_aniversario,
-      msg_pos_venda: configs.msg_pos_venda
-    });
-
+    res.json(configs);
   } catch (error) {
-    console.error('⚠️ [Aviso GET] Falha ao ler banco (retornando campos limpos):', error.message);
-    // Retorna vazio em vez de estourar erro 500 no console do navegador
+    console.error('⚠️ [Aviso GET] Falha ao ler banco:', error.message);
     res.json({ msg_aniversario: '', msg_pos_venda: '' });
   }
 });
 
-// 🔔 ROTA POST: Remove o uso do .batch() para impedir o disparo de rotinas de migração do SDK
+// Salva as configurações de mensagens de forma direta
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const { msg_aniversario, msg_pos_venda } = req.body;
-    
-    const textoAniversario = String(msg_aniversario || '').trim();
-    const textoPosVenda = String(msg_pos_venda || '').trim();
-
-    console.log('📝 Gravando templates de mensagens de forma direta...');
-
-    // 🔥 A MUDANÇA OPERACIONAL: Executa de forma sequencial isolada em vez de .batch()
-    // Isso ignora por completo a validação remota que gerava o erro 400/500
     await turso.execute({
       sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
-      args: [textoAniversario]
+      args: [String(msg_aniversario || '').trim()]
     });
-
     await turso.execute({
       sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
-      args: [textoPosVenda]
+      args: [String(msg_pos_venda || '').trim()]
     });
-
-    console.log('✅ Gravação concluída com sucesso!');
     res.json({ success: true, message: 'Modelos de mensagens salvos com sucesso!' });
-
   } catch (error) {
-    console.error("❌ [ERRO CRÍTICO NO POST] Falha ao salvar no Turso:", error);
-    res.status(500).json({ 
-      error: 'Erro interno ao salvar configurações', 
-      detalhes: error.message 
-    });
+    res.status(500).json({ error: 'Erro interno ao salvar configurações', detalhes: error.message });
   }
 });
 
 app.post('/api/whatsapp/desconectar', async (req, res) => {
-  if (!whatsappClient) {
-    return res.status(400).json({ error: 'WhatsApp não está ativo para desconectar.' });
-  }
+  if (!whatsappClient) return res.status(400).json({ error: 'WhatsApp não está ativo.' });
   try {
     statusConexao = 'Desconectando...';
     await whatsappClient.logout();
     statusConexao = 'Desconectado';
     qrCodeBase64 = null;
     whatsappClient = null;
-    
     res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
-
-    setTimeout(() => {
-      console.log('🔄 Reiniciando motor após logout manual para disponibilizar novo QR Code...');
-      inicializarWhatsApp();
-    }, 3000);
-
+    setTimeout(() => inicializarWhatsApp(), 3000);
   } catch (error) {
-    statusConexao = 'Erro ao desconectar';
     res.status(500).json({ error: error.message });
   }
 });
 
 app.get('/', (req, res) => res.send('Servidor Ótica Luz Ativo com Baileys!'));
 
-// ==========================================
-// 3. INICIALIZAÇÃO DO SERVIDOR HTTP
-// ==========================================
 app.listen(PORT, () => {
   console.log(`🚀 Servidor HTTP rodando na porta ${PORT}`);
-  statusConexao = 'Iniciando motor...';
   inicializarWhatsApp();
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (CORRIGIDA E BLINDADA)
+// 4. INICIALIZAÇÃO DO WHATSAPP (SESSÃO INFINITA DE ALTÍSSIMA PERFORMANCE)
 // ==========================================
 
 async function inicializarWhatsApp() {
   try {
-    // 1. Busca as credenciais salvas na tabela configuracoes do Turso
-    const resCreds = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
+    statusConexao = 'Iniciando motor...';
     
-    let credsCarregadas = null;
-    if (resCreds.rows && resCreds.rows[0]?.valor) {
+    // 1. Coleta a sessão completa estruturada (Creds + Chaves de criptografia profundas)
+    const resSessao = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_full_session'");
+    
+    let dadosSessao = { creds: null, keys: {} };
+    if (resSessao.rows && resSessao.rows[0]?.valor) {
       try {
-        // 🔥 GRAVAÇÃO LIMPA: Executa a restauração completa das chaves criptográficas 
-        // convertendo a estrutura de volta para instâncias reais de Buffer do Node.js
-        credsCarregadas = JSON.parse(resCreds.rows[0].valor, (key, value) => {
+        dadosSessao = JSON.parse(resSessao.rows[0].valor, (key, value) => {
           if (value && value.type === 'Buffer' && Array.isArray(value.data)) {
             return Buffer.from(value.data);
           }
           return value;
         });
-        console.log("📖 [Persistência] Chaves de sessão anteriores recuperadas do Turso.");
+        console.log("📖 [Persistência Nível 2] Sessão criptográfica perpétua carregada do Turso.");
       } catch (e) {
-        console.log("⚠️ Erro ao decodificar chaves antigas do Turso, iniciando limpo...", e.message);
+        console.log("⚠️ Erro ao decodificar sessão completa, iniciando limpo...");
       }
     }
 
     const { initAuthCreds } = await import('@whiskeysockets/baileys');
     
+    const creds = dadosSessao.creds || initAuthCreds();
+    const chavesSalvas = dadosSessao.keys || {};
+    
+    // 🔥 ENGENHARIA PERPÉTUA: Intercepta e sincroniza dinamicamente as prekeys e locks do WebSocket
     const state = {
-      creds: credsCarregadas || initAuthCreds(),
+      creds: creds,
       keys: {
         get: (type, ids) => {
           const data = {};
+          for (const id of ids) {
+            if (chavesSalvas[type]?.[id]) {
+              data[id] = chavesSalvas[type][id];
+            }
+          }
           return data;
         },
-        set: (data) => {
-          // Processado dinamicamente via creds.update
+        set: async (data) => {
+          for (const type in data) {
+            if (!chavesSalvas[type]) chavesSalvas[type] = {};
+            for (const id in data[type]) {
+              if (data[type][id]) {
+                chavesSalvas[type][id] = data[type][id];
+              } else {
+                delete chavesSalvas[type][id];
+              }
+            }
+          }
+          await guardarSessaoNoBanco();
         }
       }
     };
 
     const guardarSessaoNoBanco = async () => {
       try {
-        const textoSessao = JSON.stringify(state.creds);
+        const payload = JSON.stringify({ creds: state.creds, keys: chavesSalvas });
         await turso.execute({
-          sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_session_creds', ?)",
-          args: [textoSessao]
+          sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_full_session', ?)",
+          args: [payload]
         });
-        console.log("💾 [Banco] Chaves de pareamento atualizadas com sucesso no Turso!");
       } catch (err) {
-        console.error("❌ [Erro Persistência] Falha ao injetar chaves no banco:", err.message);
+        console.error("❌ Erro ao salvar sessão completa no Turso:", err.message);
       }
     };
 
@@ -244,18 +213,13 @@ async function inicializarWhatsApp() {
         qrCodeBase64 = null;
 
         if (foiDeslogado) {
-          console.log('🧹 Limpando chaves revogadas/antigas do banco de dados...');
+          console.log('🧹 Limpando chaves revogadas da tabela...');
           try {
-            await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_session_creds'");
-            console.log('✅ Base de dados limpa para nova sincronização!');
+            await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_full_session'");
           } catch (e) {
-            console.log('Erro ao limpar chave obsoleta do banco:', e.message);
+            console.log('Erro ao limpar banco:', e.message);
           }
-          
-          setTimeout(() => {
-            console.log('🔄 Reiniciando motor para gerar novo QR Code limpo...');
-            inicializarWhatsApp();
-          }, 2000);
+          setTimeout(() => inicializarWhatsApp(), 2000);
         } else {
           inicializarWhatsApp();
         }
@@ -263,7 +227,7 @@ async function inicializarWhatsApp() {
       } else if (connection === 'open') {
         statusConexao = 'Conectado';
         qrCodeBase64 = null;
-        console.log('✅ WhatsApp conectado com sucesso via Baileys no banco de dados!');
+        console.log('✅ WhatsApp conectado com sucesso via Baileys e Turso (Sessão Perpétua)!');
 
         setTimeout(() => {
           verificarAniversariantesDoDia();
@@ -282,22 +246,44 @@ async function inicializarWhatsApp() {
   }
 }
 
+async function enviarMensagemTexto(numeroComJid, texto) {
+  if (!whatsappClient) throw new Error('Client Baileys não inicializado');
+  await whatsappClient.sendMessage(numeroComJid, { text: texto });
+}
+
+// 🔥 HIGIENIZAÇÃO INTELIGENTE DO 9: Valida o número com o 9 duplo, 
+// se falhar, remove automaticamente o 9 excedente e tenta o JID clássico
+async function validarNumeroWhatsApp(numeroPuro) {
+  try {
+    const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
+    if (result && result.exists) {
+      return result.jid;
+    }
+    
+    if (numeroPuro.length === 13 && numeroPuro.startsWith('55')) {
+      const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
+      const [resultFallback] = await whatsappClient.onWhatsApp(`${numeroSemNonoDigito}@s.whatsapp.net`);
+      if (resultFallback && resultFallback.exists) {
+        return resultFallback.jid;
+      }
+    }
+    return `${numeroPuro}@s.whatsapp.net`;
+  } catch (e) {
+    return `${numeroPuro}@s.whatsapp.net`;
+  }
+}
+
 // ==========================================
 // 5. ROTINA AUTOMÁTICA DE DISPAROS
 // ==========================================
 async function verificarAniversariantesDoDia() {
   if (!whatsappClient || statusConexao !== 'Conectado') return;
-
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
-  
   if (diaAtualGerenciamento !== hojeDataCompleta) {
-    console.log(`📆 Novo dia detectado (${hojeDataCompleta}). Resetando lista de envios.`);
     diaAtualGerenciamento = hojeDataCompleta;
     clientesEnviadosHoje = []; 
   }
 
-  console.log(`🔄 Rodando checagem de aniversariantes. Já enviados hoje: ${clientesEnviadosHoje.length}`);
-  
   try {
     const resConfig = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'msg_aniversario'");
     const templateAniversario = resConfig.rows[0]?.valor || "Olá, {nome}! 🎉 Feliz Aniversário!";
@@ -315,9 +301,7 @@ async function verificarAniversariantesDoDia() {
     
     for (const cliente of resultado.rows) {
       const identificadorUnico = cliente.id || cliente.telefone; 
-      
       if (clientesEnviadosHoje.includes(identificadorUnico)) continue; 
-      
       const { nome, telefone } = cliente;
       if (!telefone) continue;
       
@@ -325,35 +309,14 @@ async function verificarAniversariantesDoDia() {
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
       const message = templateAniversario.replace(/{nome}/g, nome);
+      const jidValido = await validarNumeroWhatsApp(numeroPuro);
       
-      console.log(`🚀 Enviando para cliente novo do dia: ${nome} (${numeroPuro})`);
-      let envioSucesso = false;
-
       try {
-        const jidValido = await validarNumeroWhatsApp(numeroPuro);
         await enviarMensagemTexto(jidValido, message); 
-        console.log(`✅ Mensagem entregue para: ${nome}`);
-        envioSucesso = true;
-      } catch (err) {
-        console.log(`⚠️ Falha na primeira tentativa para ${nome}`);
-      }
-
-      if (!envioSucesso && numeroPuro.length === 13) {
-        try {
-          const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          const jidFallback = await validarNumeroWhatsApp(numeroSemNonoDigito);
-          await enviarMensagemTexto(jidFallback, message);
-          console.log(`✅ Mensagem entregue via Fallback para: ${nome}`);
-          envioSucesso = true;
-        } catch (errFallback) {
-          console.error(`❌ Falha total para ${nome}`);
-        }
-      }
-
-      if (envioSucesso) {
         clientesEnviadosHoje.push(identificadorUnico);
+      } catch (err) {
+        console.error(`Falha ao entregar mensagem para ${nome}:`, err.message);
       }
-      
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   } catch (error) {
@@ -362,21 +325,16 @@ async function verificarAniversariantesDoDia() {
 }
 
 // ==========================================
-// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA (DINÂMICA)
+// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA
 // ==========================================
 async function verificarPosVendaTrintaDias() {
   if (!whatsappClient || statusConexao !== 'Conectado') return;
-
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
-  
   if (diaAtualPosVendaGerenciamento !== hojeDataCompleta) {
-    console.log(`📆 Novo dia detectado para Pós-Venda (${hojeDataCompleta}). Resetando lista.`);
     diaAtualPosVendaGerenciamento = hojeDataCompleta;
     posVendasEnviadosHoje = []; 
   }
 
-  console.log(`🔄 Executando rotina de pós-venda. Já enviados hoje: ${posVendasEnviadosHoje.length}`);
-  
   try {
     const resConfig = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'msg_pos_venda'");
     const templatePosVenda = resConfig.rows[0]?.valor || "Olá, {nome}! Obrigado por comprar o produto {produtos}.";
@@ -392,80 +350,44 @@ async function verificarPosVendaTrintaDias() {
       return res;
     });
     
-    if (resultado.rows.length === 0) {
-      console.log('📭 Nenhuma venda encontrada para pós-venda hoje.');
-      return;
-    }
+    if (resultado.rows.length === 0) return;
     
     for (const venda of resultado.rows) {
       const { venda_id, nome, telefone, produtos } = venda;
       const identificadorVenda = venda_id || `${telefone}_${produtos}`;
-
       if (posVendasEnviadosHoje.includes(identificadorVenda)) continue;
       if (!telefone) continue;
       
       let numeroPuro = telefone.replace(/\D/g, '');
       if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
       
-      const message = templatePosVenda
-        .replace(/{nome}/g, nome)
-        .replace(/{produtos}/g, produtos);
+      const message = templatePosVenda.replace(/{nome}/g, nome).replace(/{produtos}/g, produtos);
+      const jidValido = await validarNumeroWhatsApp(numeroPuro);
       
-      console.log(`🚀 Enviando pós-venda para cliente novo: ${nome} (${numeroPuro})`);
-      let envioSucesso = false;
-
       try {
-        const jidValido = await validarNumeroWhatsApp(numeroPuro);
         await enviarMensagemTexto(jidValido, message); 
-        console.log(`✅ [Pós-Venda] Mensagem entregue para: ${nome}`);
-        envioSucesso = true;
-      } catch (err) {
-        console.log(`⚠️ [Pós-Venda] Falha na primeira tentativa para ${nome}.`);
-      }
-
-      if (!envioSucesso && numeroPuro.length === 13) {
-        try {
-          const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-          const jidFallback = await validarNumeroWhatsApp(numeroSemNonoDigito);
-          await enviarMensagemTexto(jidFallback, message);
-          console.log(`✅ [Pós-Venda] Mensagem entregue via Fallback para: ${nome}`);
-          envioSucesso = true;
-        } catch (errFallback) {
-          console.error(`❌ [Pós-Venda] Falha total para ${nome}`);
-        }
-      }
-      
-      if (envioSucesso) {
         posVendasEnviadosHoje.push(identificadorVenda);
+      } catch (err) {
+        console.error(`Falha no pós-venda de ${nome}:`, err.message);
       }
-      
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
-    
   } catch (error) {
     console.error('❌ Erro na rotina de pós-venda:', error);
   }
 }
 
-// Verifica de hora em hora se virou o dia para disparar novamente
 setInterval(() => {
   verificarAniversariantesDoDia();
   verificarPosVendaTrintaDias();
 }, 1000 * 60 * 60);
 
-// ==========================================
-// 🚀 ROTINA CRÍTICA ANTI-SLEEP INTERNA (EXCLUSIVA PARA RENDER)
-// ==========================================
-// Envia uma requisição HTTP para si mesmo localmente a cada 10 minutos para impedir 
-// que a nuvem congele o processo Node.js e desconecte o chip[cite: 2].
+// Auto-ping interno anti-sleep de 10 minutos
 setInterval(async () => {
   try {
-    // 🔥 OTIMIZAÇÃO: Pinga a porta local interna em vez da URL externa pública do Render.
-    // Isso evita gargalos de DNS da nuvem e funciona direto no núcleo do contêiner!
     const urlAutoPingLocal = `http://localhost:${PORT}/`;
-    console.log('💓 [Anti-Sleep] Enviando pulso interno de atividade para manter o robô acordado...');
     await fetch(urlAutoPingLocal);
   } catch (e) {
-    console.log('⚠️ [Anti-Sleep] Falha temporária no auto-ping, mas o motor continua rodando.');
+    // Mantém silencioso
   }
-}, 1000 * 60 * 10); // Executa a cada 10 minutos cravados
+}, 1000 * 60 * 10);
