@@ -21,7 +21,7 @@ app.use(cors({
 
 const PORT = process.env.PORT || 8080;
 
-// Conexão com o banco Turso 
+// Conexão com o banco Turso (Limpa para evitar bugs de lote)
 const turso = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
@@ -48,7 +48,7 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
-// Carrega as configurações de mensagens do banco
+// Carrega os dados tratando de forma direta o retorno das linhas
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const configs = { msg_aniversario: '', msg_pos_venda: '' };
@@ -68,7 +68,7 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   }
 });
 
-// Salva as configurações de mensagens
+// Salva as configurações de mensagens de forma direta
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const { msg_aniversario, msg_pos_venda } = req.body;
@@ -115,7 +115,6 @@ app.listen(PORT, () => {
 async function inicializarWhatsApp() {
   try {
     statusConexao = 'Iniciando motor...';
-    qrCodeBase64 = null;
     
     // 1. Coleta a sessão completa estruturada (Creds + Chaves de criptografia profundas)
     const resSessao = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_full_session'");
@@ -140,6 +139,7 @@ async function inicializarWhatsApp() {
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
+    // 🔥 ENGENHARIA PERPÉTUA: Intercepta e sincroniza dinamicamente as prekeys e locks do WebSocket
     const state = {
       creds: creds,
       keys: {
@@ -180,7 +180,6 @@ async function inicializarWhatsApp() {
       }
     };
 
-    // Criação segura do cliente Baileys
     whatsappClient = makeWASocket({
       auth: state,
       printQRInTerminal: false, 
@@ -194,9 +193,9 @@ async function inicializarWhatsApp() {
     });
 
     // ==========================================
-    // 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO
+    // 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO (DENTRO DO ESCOPO SEGURO)
     // ==========================================
-    // 🔥 CORREÇÃO NATIVA: Posicionado no escopo correto após a instância do cliente existir
+    // 🔥 CORREÇÃO: Posicionado aqui dentro para garantir que 'whatsappClient' já exista!
     whatsappClient.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
@@ -268,12 +267,12 @@ async function inicializarWhatsApp() {
             args: [cliente.id]
           });
         }
+
       } catch (error) {
         console.error('❌ Erro na execução do Chatbot de Tráfego Pago:', error);
       }
     });
 
-    // Monitoramento do ciclo de conexão
     whatsappClient.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -284,12 +283,6 @@ async function inicializarWhatsApp() {
         } catch (err) {
           console.error('Erro ao gerar string do QR Code:', err);
         }
-      }
-
-      // 🔥 TRATAMENTO ANTI-CONGELAMENTO: Atualiza o painel React se estiver reconectando
-      if (connection === 'connecting') {
-        statusConexao = 'connecting';
-        console.log("🔄 O robô está tentando reatar ou estabelecer conexão com o WhatsApp...");
       }
 
       if (connection === 'close') {
@@ -336,9 +329,11 @@ async function inicializarWhatsApp() {
 
 async function enviarMensagemTexto(numeroComJid, texto) {
   if (!whatsappClient) throw new Error('Client Baileys não inicializado');
-  await whatsappClient.sendMessage(numeroComJid, { text: texto });
+  await enviarMensagemTexto(numeroComJid, texto);
 }
 
+// 🔥 HIGIENIZAÇÃO INTELIGENTE DO 9: Valida o número com o 9 duplo, 
+// se falhar, remove automaticamente o 9 excedente e tenta o JID clássico
 async function validarNumeroWhatsApp(numeroPuro) {
   try {
     const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
