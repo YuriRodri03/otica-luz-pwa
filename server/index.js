@@ -21,7 +21,7 @@ app.use(cors({
 
 const PORT = process.env.PORT || 8080;
 
-// Conexão com o banco Turso (Limpa para evitar bugs de lote)
+// Conexão com o banco Turso 
 const turso = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
@@ -48,7 +48,7 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
-// Carrega os dados tratando de forma direta o retorno das linhas
+// Carrega as configurações de mensagens do banco
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const configs = { msg_aniversario: '', msg_pos_venda: '' };
@@ -68,7 +68,7 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   }
 });
 
-// Salva as configurações de mensagens de forma direta
+// Salva as configurações de mensagens
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const { msg_aniversario, msg_pos_venda } = req.body;
@@ -115,6 +115,7 @@ app.listen(PORT, () => {
 async function inicializarWhatsApp() {
   try {
     statusConexao = 'Iniciando motor...';
+    qrCodeBase64 = null;
     
     // 1. Coleta a sessão completa estruturada (Creds + Chaves de criptografia profundas)
     const resSessao = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_full_session'");
@@ -139,7 +140,6 @@ async function inicializarWhatsApp() {
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
-    // 🔥 ENGENHARIA PERPÉTUA: Intercepta e sincroniza dinamicamente as prekeys e locks do WebSocket
     const state = {
       creds: creds,
       keys: {
@@ -180,6 +180,7 @@ async function inicializarWhatsApp() {
       }
     };
 
+    // Criação segura do cliente Baileys
     whatsappClient = makeWASocket({
       auth: state,
       printQRInTerminal: false, 
@@ -192,6 +193,87 @@ async function inicializarWhatsApp() {
       }
     });
 
+    // ==========================================
+    // 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO
+    // ==========================================
+    // 🔥 CORREÇÃO NATIVA: Posicionado no escopo correto após a instância do cliente existir
+    whatsappClient.ev.on('messages.upsert', async (m) => {
+      try {
+        const msg = m.messages[0];
+        if (!msg.message || msg.key.fromMe) return; 
+
+        const jid = msg.key.remoteJid;
+        if (!jid.endsWith('@s.whatsapp.net')) return; 
+
+        const numeroPuro = jid.split('@')[0];
+
+        const resCliente = await turso.execute({
+          sql: "SELECT id, nome, origem, etapa_chatbot FROM clientes WHERE telefone LIKE ?",
+          args: [`%${numeroPuro}%`]
+        });
+
+        if (resCliente.rows.length === 0) return;
+        
+        const cliente = resCliente.rows[0];
+        if (cliente.origem !== 'trafego_pago') return;
+
+        const textoCliente = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim().toLowerCase();
+
+        if (cliente.etapa_chatbot === 'inicio') {
+          const boasVindas = `Olá, seja bem-vindo 💡\n\nAqui é o José da Ótica Luz, como posso ajudar?\n\n*Antes de começarmos, você já tem exame de vista recente?* \n*(Responda apenas SIM ou NÃO)*`;
+          
+          await whatsappClient.sendMessage(jid, { text: boasVindas });
+          
+          await turso.execute({
+            sql: "UPDATE clientes SET etapa_chatbot = 'aguardando_exame' WHERE id = ?",
+            args: [cliente.id]
+          });
+          return;
+        }
+
+        if (cliente.etapa_chatbot === 'aguardando_exame') {
+          if (textoCliente === 'sim' || textoCliente === 'só' || textoCliente === 'tenho' || textoCliente === 's') {
+            await whatsappClient.sendMessage(jid, { text: `Que ótimo! Já facilita muito. Vou te enviar um áudio explicativo e os nossos catálogos (Feminino e Masculino) para você dar uma olhada nas nossas armações! 👇` });
+          } else if (textoCliente === 'não' || textoCliente === 'nao' || textoCliente === 'n' || textoCliente === 'não tenho') {
+            await whatsappClient.sendMessage(jid, { text: `Não tem problema! Nós conseguimos te ajudar com isso também. Enquanto combinamos, vou te enviar um áudio explicativo e os nossos catálogos (Feminino e Masculino) para você conhecer nossos modelos! 👇` });
+          } else {
+            await whatsappClient.sendMessage(jid, { text: `Por favor, responda apenas *SIM* ou *NÃO* para que eu possa te direcionar corretamente. 😊` });
+            return;
+          }
+
+          console.log(`📦 Disparando kit de mídia de tráfego pago para ${cliente.nome || numeroPuro}`);
+
+          await whatsappClient.sendMessage(jid, {
+            audio: { url: './midias/audio_explicativo.ogg' },
+            mimetype: 'audio/mp4',
+            ptt: true 
+          });
+
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          await whatsappClient.sendMessage(jid, {
+            document: { url: './midias/catalogo_feminino.pdf' },
+            mimetype: 'application/pdf',
+            fileName: 'Catálogo Feminino - Ótica Luz.pdf'
+          });
+
+          await whatsappClient.sendMessage(jid, {
+            document: { url: './midias/catalogo_masculino.pdf' },
+            mimetype: 'application/pdf',
+            fileName: 'Catálogo Masculino - Ótica Luz.pdf'
+          });
+
+          await turso.execute({
+            sql: "UPDATE clientes SET etapa_chatbot = 'finalizado' WHERE id = ?",
+            args: [cliente.id]
+          });
+        }
+      } catch (error) {
+        console.error('❌ Erro na execução do Chatbot de Tráfego Pago:', error);
+      }
+    });
+
+    // Monitoramento do ciclo de conexão
     whatsappClient.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -202,6 +284,12 @@ async function inicializarWhatsApp() {
         } catch (err) {
           console.error('Erro ao gerar string do QR Code:', err);
         }
+      }
+
+      // 🔥 TRATAMENTO ANTI-CONGELAMENTO: Atualiza o painel React se estiver reconectando
+      if (connection === 'connecting') {
+        statusConexao = 'connecting';
+        console.log("🔄 O robô está tentando reatar ou estabelecer conexão com o WhatsApp...");
       }
 
       if (connection === 'close') {
@@ -251,8 +339,6 @@ async function enviarMensagemTexto(numeroComJid, texto) {
   await whatsappClient.sendMessage(numeroComJid, { text: texto });
 }
 
-// 🔥 HIGIENIZAÇÃO INTELIGENTE DO 9: Valida o número com o 9 duplo, 
-// se falhar, remove automaticamente o 9 excedente e tenta o JID clássico
 async function validarNumeroWhatsApp(numeroPuro) {
   try {
     const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
@@ -381,105 +467,6 @@ setInterval(() => {
   verificarAniversariantesDoDia();
   verificarPosVendaTrintaDias();
 }, 1000 * 60 * 60);
-
-// ==========================================
-// 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO (CATÁLOGO FEMININO E MASCULINO)
-// ==========================================
-
-whatsappClient.ev.on('messages.upsert', async (m) => {
-  try {
-    const msg = m.messages[0];
-    if (!msg.message || msg.key.fromMe) return; // Ignora mensagens enviadas por você mesmo
-
-    const jid = msg.key.remoteJid;
-    if (!jid.endsWith('@s.whatsapp.net')) return; // Ignora grupos
-
-    // Extrai o número puro do cliente
-    const numeroPuro = jid.split('@')[0];
-
-    // 1. Verifica se o cliente existe no banco e qual a sua origem/etapa
-    const resCliente = await turso.execute({
-      sql: "SELECT id, nome, origem, etapa_chatbot FROM clientes WHERE telefone LIKE ?",
-      args: [`%${numeroPuro}%`]
-    });
-
-    // Se o cliente não existe ou não veio do tráfego pago, ignora para não interferir no atendimento humano normal
-    if (resCliente.rows.length === 0) return;
-    
-    const cliente = resCliente.rows[0];
-    if (cliente.origem !== 'trafego_pago') return;
-
-    // Captura o texto que o cliente digitou
-    const textoCliente = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim().toLowerCase();
-
-    // ==========================================
-    // GERENCIADOR DE ETAPAS (CHATBOT)
-    // ==========================================
-    
-    // ETAPA 1: O cliente acabou de entrar pelo anúncio e enviou a primeira mensagem
-    if (cliente.etapa_chatbot === 'inicio') {
-      const boasVindas = `Olá, seja bem-vindo 💡\n\nAqui é o José da Ótica Luz, como posso ajudar?\n\n*Antes de começarmos, você já tem exame de vista recente?* \n*(Responda apenas SIM ou NÃO)*`;
-      
-      await whatsappClient.sendMessage(jid, { text: boasVindas });
-      
-      // Atualiza o cliente para a próxima etapa, aguardando a resposta do exame
-      await turso.execute({
-        sql: "UPDATE clientes SET etapa_chatbot = 'aguardando_exame' WHERE id = ?",
-        args: [cliente.id]
-      });
-      return;
-    }
-
-    // ETAPA 2: O cliente está respondendo se tem ou não o exame
-    if (cliente.etapa_chatbot === 'aguardando_exame') {
-      if (textoCliente === 'sim' || textoCliente === 'só' || textoCliente === 'tenho' || textoCliente === 's') {
-        await whatsappClient.sendMessage(jid, { text: `Que ótimo! Já facilita muito. Vou te enviar um áudio explicativo e os nossos catálogos (Feminino e Masculino) para você dar uma olhada nas nossas armações! 👇` });
-      } else if (textoCliente === 'não' || textoCliente === 'nao' || textoCliente === 'n' || textoCliente === 'não tenho') {
-        await whatsappClient.sendMessage(jid, { text: `Não tem problema! Nós conseguimos te ajudar com isso também. Enquanto combinamos, vou te enviar um áudio explicativo e os nossos catálogos (Feminino e Masculino) para você conhecer nossos modelos! 👇` });
-      } else {
-        // Se responder qualquer outra coisa, o robô insiste na resposta correta
-        await whatsappClient.sendMessage(jid, { text: `Por favor, responda apenas *SIM* ou *NÃO* para que eu possa te direcionar corretamente. 😊` });
-        return;
-      }
-
-      // 🔥 DISPARO DOS ARQUIVOS (ÁUDIO + 2 CATÁLOGOS SEGMENTADOS)
-      console.log(`📦 Disparando kit de mídia de tráfego pago para ${cliente.nome || numeroPuro}`);
-
-      // 1. Enviar o Áudio (Aparece como "Gravado na hora")
-      await whatsappClient.sendMessage(jid, {
-        audio: { url: './midias/audio_explicativo.ogg' },
-        mimetype: 'audio/mp4',
-        ptt: true 
-      });
-
-      // Pequeno delay de 2 segundos para simular comportamento humano natural
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // 2. Enviar Catálogo Feminino (PDF)
-      await whatsappClient.sendMessage(jid, {
-        document: { url: './midias/catalogo_feminino.pdf' },
-        mimetype: 'application/pdf',
-        fileName: 'Catálogo Feminino - Ótica Luz.pdf'
-      });
-
-      // 3. Enviar Catálogo Masculino (PDF)
-      await whatsappClient.sendMessage(jid, {
-        document: { url: './midias/catalogo_masculino.pdf' },
-        mimetype: 'application/pdf',
-        fileName: 'Catálogo Masculino - Ótica Luz.pdf'
-      });
-
-      // Finaliza o fluxo do chatbot para o cliente ficar livre para o José assumir o atendimento humano
-      await turso.execute({
-        sql: "UPDATE clientes SET etapa_chatbot = 'finalizado' WHERE id = ?",
-        args: [cliente.id]
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ Erro na execução do Chatbot de Tráfego Pago:', error);
-  }
-});
 
 // Auto-ping interno anti-sleep de 10 minutos
 setInterval(async () => {
