@@ -52,7 +52,12 @@ app.get('/api/whatsapp/status', (req, res) => {
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const configs = { msg_aniversario: '', msg_pos_venda: '' };
-    const r = await turso.execute("SELECT chave, valor FROM configuracoes");
+    
+    // 🎯 CORREÇÃO CRÍTICA: Busca apenas as mensagens, sem puxar o payload gigante do WhatsApp
+    const r = await turso.execute({
+      sql: "SELECT chave, valor FROM configuracoes WHERE chave IN ('msg_aniversario', 'msg_pos_venda')",
+      args: []
+    });
     
     if (r && r.rows) {
       r.rows.forEach(row => {
@@ -63,8 +68,9 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
     }
     res.json(configs);
   } catch (error) {
-    console.error('⚠️ [Aviso GET] Falha ao ler banco:', error.message);
-    res.json({ msg_aniversario: '', msg_pos_venda: '' });
+    console.error('⚠️ [Erro GET] Falha ao ler templates no Turso:', error.message);
+    // 🎯 CORREÇÃO: Retorna um status de erro real (503) em vez de fingir sucesso com strings vazias
+    res.status(503).json({ error: 'Banco de dados ocupado, tentando novamente...', detalhes: error.message });
   }
 });
 
