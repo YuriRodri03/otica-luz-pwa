@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors'; 
 import { createClient } from '@libsql/client';
-import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, initAuthCreds } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import dotenv from 'dotenv';
 
@@ -116,7 +116,6 @@ async function inicializarWhatsApp() {
   try {
     statusConexao = 'Iniciando motor...';
     
-    // 1. Coleta a sessão completa estruturada (Creds + Chaves de criptografia profundas)
     const resSessao = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'whatsapp_full_session'");
     
     let dadosSessao = { creds: null, keys: {} };
@@ -133,13 +132,10 @@ async function inicializarWhatsApp() {
         console.log("⚠️ Erro ao decodificar sessão completa, iniciando limpo...");
       }
     }
-
-    const { initAuthCreds } = await import('@whiskeysockets/baileys');
     
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
-    // 🔥 ENGENHARIA PERPÉTUA: Intercepta e sincroniza dinamicamente as prekeys e locks do WebSocket
     const state = {
       creds: creds,
       keys: {
@@ -180,19 +176,16 @@ async function inicializarWhatsApp() {
       }
     };
 
-    // Coleta a última versão estável do WA para evitar conflitos de protocolo
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`Usando versão do WA: ${version.join('.')}, é a mais recente? ${isLatest}`);
 
     whatsappClient = makeWASocket({
       auth: state,
-      version: version, // ESSENCIAL: Evita falhas de rede no handshake
+      version: version, 
       printQRInTerminal: false, 
-      browser: ['Ótica Luz', 'Chrome', '126.0.0.0'], // Dispositivo reconhecido fixo
-      defaultQueryTimeoutMs: 60000, // Timeout estendido para conexões instáveis
+      browser: ['Ótica Luz', 'Chrome', '126.0.0.0'], 
+      defaultQueryTimeoutMs: 60000, 
       keepAliveIntervalMs: 30000, 
-      // 🔥 Otimização de Memória essencial para o RENDER:
-      // Impede o Baileys de carregar históricos antigos na RAM do servidor
       syncFullHistory: false, 
       markOnlineOnConnect: true,
       patchMessageBeforeSending: (msg) => {
@@ -215,41 +208,35 @@ async function inicializarWhatsApp() {
         const jid = msg.key.remoteJid;
         if (!jid.endsWith('@s.whatsapp.net')) return; 
 
-        // Captura o texto exato enviado na conversa
-        const textoRecebido = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
+        // Captura o texto recebido normalizando quebras de linha invisíveis
+        const textoRecebido = (msg.message.conversation || msg.message.extendedTextMessage?.text || '')
+          .replace(/\r\n/g, '\n')
+          .trim();
 
-        // 🎯 O gatilho exato com a quebra de linha correta
         const gatilhoTrafegoPago = `Olá cliente, seja bem-vindo 💡\n\naqui é o José da Ótica Luz, como posso ajudar?`;
 
-        // Se a mensagem enviada for exatamente o gatilho do anúncio
         if (textoRecebido === gatilhoTrafegoPago) {
           const numeroPuro = jid.split('@')[0];
           console.log(`🚀 Lead de tráfego pago detectado para o número: ${numeroPuro}. Enviando mídias...`);
 
-          // 1. Aguarda 3 segundos (tempo do cliente ver a mensagem inicial e simular a gravação do áudio)
           await new Promise(resolve => setTimeout(resolve, 3000));
 
-          // 2. Envia o áudio explicativo (PTT: true faz parecer gravado na hora)
           await whatsappClient.sendMessage(jid, {
             audio: { url: './midias/audio_explicativo.ogg' },
             mimetype: 'audio/mp4',
             ptt: true 
           });
 
-          // 3. Aguarda 4 segundos antes de mandar os catálogos
           await new Promise(resolve => setTimeout(resolve, 4000));
 
-          // 4. Envia o Catálogo Feminino
           await whatsappClient.sendMessage(jid, {
             document: { url: './midias/catalogo_feminino.pdf' },
             mimetype: 'application/pdf',
             fileName: 'Catálogo Feminino - Ótica Luz.pdf'
           });
 
-          // Pequeno intervalo entre os arquivos
           await new Promise(resolve => setTimeout(resolve, 1500));
 
-          // 5. Envia o Catálogo Masculino
           await whatsappClient.sendMessage(jid, {
             document: { url: './midias/catalogo_masculino.pdf' },
             mimetype: 'application/pdf',
@@ -258,7 +245,6 @@ async function inicializarWhatsApp() {
 
           console.log(`✅ Combo de mídias enviado com sucesso para: ${numeroPuro}`);
 
-          // Salva automaticamente o novo contato no Turso para manter o seu CRM atualizado
           try {
             await turso.execute({
               sql: "INSERT OR IGNORE INTO clientes (telefone, origem, etapa_chatbot) VALUES (?, 'trafego_pago', 'finalizado')",
@@ -266,7 +252,7 @@ async function inicializarWhatsApp() {
             });
             console.log(`💾 Novo lead ${numeroPuro} salvo no banco como 'trafego_pago'.`);
           } catch (dbErr) {
-            // Silencioso caso a tabela tenha campos obrigatórios adicionais
+            console.error('⚠️ Erro ao registrar contato de tráfego pago:', dbErr.message);
           }
         }
 
@@ -304,7 +290,6 @@ async function inicializarWhatsApp() {
           }
           setTimeout(() => inicializarWhatsApp(), 2000);
         } else {
-          // Pequeno delay para evitar loops infinitos rápidos no Render
           setTimeout(() => inicializarWhatsApp(), 5000);
         }
         
@@ -320,9 +305,7 @@ async function inicializarWhatsApp() {
       }
     });
 
-    whatsappClient.ev.on('creds.update', async () => {
-      await guardarSessaoNoBanco();
-    });
+    // Removido o guardarSessaoNoBanco direto daqui para evitar gargalos redundantes no Turso
 
   } catch (error) {
     statusConexao = 'Erro ao conectar';
@@ -330,15 +313,11 @@ async function inicializarWhatsApp() {
   }
 }
 
-// 🔥 Correção crucial: A função estava recursiva (chamando a si mesma infinitamente)
-// Agora ela envia usando o whatsappClient de forma correta.
 async function enviarMensagemTexto(numeroComJid, texto) {
   if (!whatsappClient) throw new Error('Client Baileys não inicializado');
   await whatsappClient.sendMessage(numeroComJid, { text: texto });
 }
 
-// 🔥 HIGIENIZAÇÃO INTELIGENTE DO 9: Valida o número com o 9 duplo, 
-// se falhar, remove automaticamente o 9 excedente e tenta o JID clássico
 async function validarNumeroWhatsApp(numeroPuro) {
   try {
     const [result] = await whatsappClient.onWhatsApp(`${numeroPuro}@s.whatsapp.net`);
@@ -348,7 +327,7 @@ async function validarNumeroWhatsApp(numeroPuro) {
     
     if (numeroPuro.length === 13 && numeroPuro.startsWith('55')) {
       const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-      const [resultFallback] = await whatsappClient.onWhatsApp(`${numeroSemNonoDigito}@s.whatsapp.net`);
+      const [resultFallback] = await whatsappClient.onWhatsApp(`${numeroSemSemNonoDigito || numeroSemNonoDigito}@s.whatsapp.net`);
       if (resultFallback && resultFallback.exists) {
         return resultFallback.jid;
       }
@@ -468,7 +447,6 @@ setInterval(() => {
   verificarPosVendaTrintaDias();
 }, 1000 * 60 * 60);
 
-// Auto-ping interno anti-sleep de 10 minutos
 setInterval(async () => {
   try {
     const urlAutoPingLocal = `http://localhost:${PORT}/`;
