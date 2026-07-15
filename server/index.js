@@ -136,6 +136,7 @@ async function inicializarWhatsApp() {
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
+    // 🔥 ENGENHARIA PERPÉTUA OTIMIZADA: Filtra dados essenciais e previne corrupção de payload no Turso
     const state = {
       creds: creds,
       keys: {
@@ -149,17 +150,26 @@ async function inicializarWhatsApp() {
           return data;
         },
         set: async (data) => {
+          let mudouAlgo = false;
           for (const type in data) {
-            if (!chavesSalvas[type]) chavesSalvas[type] = {};
-            for (const id in data[type]) {
-              if (data[type][id]) {
-                chavesSalvas[type][id] = data[type][id];
-              } else {
-                delete chavesSalvas[type][id];
+            // Salva apenas chaves essenciais de criptografia e login para não estourar a RAM do Render
+            if (type === 'app-state-sync-key' || type === 'session' || type === 'pre-key') {
+              if (!chavesSalvas[type]) chavesSalvas[type] = {};
+              for (const id in data[type]) {
+                if (data[type][id]) {
+                  chavesSalvas[type][id] = data[type][id];
+                  mudouAlgo = true;
+                } else if (chavesSalvas[type][id]) {
+                  delete chavesSalvas[type][id];
+                  mudouAlgo = true;
+                }
               }
             }
           }
-          await guardarSessaoNoBanco();
+          // Só faz requisição ao Turso se chaves realmente cruciais mudaram
+          if (mudouAlgo) {
+            await guardarSessaoNoBanco();
+          }
         }
       }
     };
@@ -275,20 +285,25 @@ async function inicializarWhatsApp() {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-        const foiDeslogado = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+        // Identifica erros fatais de autenticação ou loops de stream corrompida (ex: 401, 403, 515)
+        const sessaoInvalida = statusCode === DisconnectReason.loggedOut || 
+                               statusCode === 401 || 
+                               statusCode === 403 || 
+                               statusCode === 515;
         
-        console.log(`Conexão fechada. Código: ${statusCode}. Foi deslogado? ${foiDeslogado}`);
+        console.log(`Conexão fechada. Código: ${statusCode}. Sessão inválida/corrompida? ${sessaoInvalida}`);
         statusConexao = 'Desconectado';
         qrCodeBase64 = null;
 
-        if (foiDeslogado) {
-          console.log('🧹 Limpando chaves revogadas da tabela...');
+        if (sessaoInvalida) {
+          // 🧹 AUTO-LIMPEZA AUTOMÁTICA: O próprio server limpa a chave corrompida do Turso sem travar o loop
+          console.log('🧹 [Auto-Limpeza] Removendo registro inválido do Turso de forma automatizada...');
           try {
             await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_full_session'");
           } catch (e) {
             console.log('Erro ao limpar banco:', e.message);
           }
-          setTimeout(() => inicializarWhatsApp(), 2000);
+          setTimeout(() => inicializarWhatsApp(), 3000);
         } else {
           setTimeout(() => inicializarWhatsApp(), 5000);
         }
@@ -305,7 +320,9 @@ async function inicializarWhatsApp() {
       }
     });
 
-    // Removido o guardarSessaoNoBanco direto daqui para evitar gargalos redundantes no Turso
+    whatsappClient.ev.on('creds.update', async () => {
+      await guardarSessaoNoBanco();
+    });
 
   } catch (error) {
     statusConexao = 'Erro ao conectar';
@@ -327,7 +344,7 @@ async function validarNumeroWhatsApp(numeroPuro) {
     
     if (numeroPuro.length === 13 && numeroPuro.startsWith('55')) {
       const numeroSemNonoDigito = numeroPuro.substring(0, 4) + numeroPuro.substring(5);
-      const [resultFallback] = await whatsappClient.onWhatsApp(`${numeroSemSemNonoDigito || numeroSemNonoDigito}@s.whatsapp.net`);
+      const [resultFallback] = await whatsappClient.onWhatsApp(`${numeroSemNonoDigito}@s.whatsapp.net`);
       if (resultFallback && resultFallback.exists) {
         return resultFallback.jid;
       }
