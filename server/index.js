@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors'; 
 import { createClient } from '@libsql/client';
-import makeWASocket, { DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import dotenv from 'dotenv';
 
@@ -180,22 +180,33 @@ async function inicializarWhatsApp() {
       }
     };
 
+    // Coleta a última versão estável do WA para evitar conflitos de protocolo
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Usando versão do WA: ${version.join('.')}, é a mais recente? ${isLatest}`);
+
     whatsappClient = makeWASocket({
       auth: state,
+      version: version, // ESSENCIAL: Evita falhas de rede no handshake
       printQRInTerminal: false, 
-      defaultQueryTimeoutMs: undefined,
+      browser: ['Ótica Luz', 'Chrome', '126.0.0.0'], // Dispositivo reconhecido fixo
+      defaultQueryTimeoutMs: 60000, // Timeout estendido para conexões instáveis
       keepAliveIntervalMs: 30000, 
-      options: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      // 🔥 Otimização de Memória essencial para o RENDER:
+      // Impede o Baileys de carregar históricos antigos na RAM do servidor
+      syncFullHistory: false, 
+      markOnlineOnConnect: true,
+      patchMessageBeforeSending: (msg) => {
+        const hasSender = !!(msg.message && (msg.message.buttonsMessage || msg.message.templateMessage || msg.message.listMessage));
+        if (hasSender) {
+            msg.message = { viewOnceMessage: { message: { messageContextInfo: { deviceListMetadataVersion: 2, deviceListMetadata: {} }, ...msg.message } } };
         }
+        return msg;
       }
     });
 
     // ==========================================
-    // 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO (DENTRO DO ESCOPO SEGURO)
+    // 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO
     // ==========================================
-    // 🔥 CORREÇÃO: Posicionado aqui dentro para garantir que 'whatsappClient' já exista!
     whatsappClient.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
@@ -302,7 +313,8 @@ async function inicializarWhatsApp() {
           }
           setTimeout(() => inicializarWhatsApp(), 2000);
         } else {
-          inicializarWhatsApp();
+          // Pequeno delay para evitar loops infinitos rápidos no Render
+          setTimeout(() => inicializarWhatsApp(), 5000);
         }
         
       } else if (connection === 'open') {
@@ -327,9 +339,11 @@ async function inicializarWhatsApp() {
   }
 }
 
+// 🔥 Correção crucial: A função estava recursiva (chamando a si mesma infinitamente)
+// Agora ela envia usando o whatsappClient de forma correta.
 async function enviarMensagemTexto(numeroComJid, texto) {
   if (!whatsappClient) throw new Error('Client Baileys não inicializado');
-  await enviarMensagemTexto(numeroComJid, texto);
+  await whatsappClient.sendMessage(numeroComJid, { text: texto });
 }
 
 // 🔥 HIGIENIZAÇÃO INTELIGENTE DO 9: Valida o número com o 9 duplo, 
