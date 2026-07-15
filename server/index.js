@@ -205,82 +205,73 @@ async function inicializarWhatsApp() {
     });
 
     // ==========================================
-    // 🤖 CHATBOT INTERATIVO PARA TRÁFEGO PAGO
+    // 🤖 DISPARADOR AUTOMÁTICO DE MÍDIAS VIA TEXTO-GATILHO DO TRÁFEGO PAGO
     // ==========================================
     whatsappClient.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return; 
+        if (!msg.message) return; 
 
         const jid = msg.key.remoteJid;
         if (!jid.endsWith('@s.whatsapp.net')) return; 
 
-        const numeroPuro = jid.split('@')[0];
+        // Captura o texto exato enviado na conversa
+        const textoRecebido = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
 
-        const resCliente = await turso.execute({
-          sql: "SELECT id, nome, origem, etapa_chatbot FROM clientes WHERE telefone LIKE ?",
-          args: [`%${numeroPuro}%`]
-        });
+        // 🎯 O gatilho exato com a quebra de linha correta
+        const gatilhoTrafegoPago = `Olá cliente, seja bem-vindo 💡\n\naqui é o José da Ótica Luz, como posso ajudar?`;
 
-        if (resCliente.rows.length === 0) return;
-        
-        const cliente = resCliente.rows[0];
-        if (cliente.origem !== 'trafego_pago') return;
+        // Se a mensagem enviada for exatamente o gatilho do anúncio
+        if (textoRecebido === gatilhoTrafegoPago) {
+          const numeroPuro = jid.split('@')[0];
+          console.log(`🚀 Lead de tráfego pago detectado para o número: ${numeroPuro}. Enviando mídias...`);
 
-        const textoCliente = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim().toLowerCase();
+          // 1. Aguarda 3 segundos (tempo do cliente ver a mensagem inicial e simular a gravação do áudio)
+          await new Promise(resolve => setTimeout(resolve, 3000));
 
-        if (cliente.etapa_chatbot === 'inicio') {
-          const boasVindas = `Olá, seja bem-vindo 💡\n\nAqui é o José da Ótica Luz, como posso ajudar?\n\n*Antes de começarmos, você já tem exame de vista recente?* \n*(Responda apenas SIM ou NÃO)*`;
-          
-          await whatsappClient.sendMessage(jid, { text: boasVindas });
-          
-          await turso.execute({
-            sql: "UPDATE clientes SET etapa_chatbot = 'aguardando_exame' WHERE id = ?",
-            args: [cliente.id]
-          });
-          return;
-        }
-
-        if (cliente.etapa_chatbot === 'aguardando_exame') {
-          if (textoCliente === 'sim' || textoCliente === 'só' || textoCliente === 'tenho' || textoCliente === 's') {
-            await whatsappClient.sendMessage(jid, { text: `Que ótimo! Já facilita muito. Vou te enviar um áudio explicativo e os nossos catálogos (Feminino e Masculino) para você dar uma olhada nas nossas armações! 👇` });
-          } else if (textoCliente === 'não' || textoCliente === 'nao' || textoCliente === 'n' || textoCliente === 'não tenho') {
-            await whatsappClient.sendMessage(jid, { text: `Não tem problema! Nós conseguimos te ajudar com isso também. Enquanto combinamos, vou te enviar um áudio explicativo e os nossos catálogos (Feminino e Masculino) para você conhecer nossos modelos! 👇` });
-          } else {
-            await whatsappClient.sendMessage(jid, { text: `Por favor, responda apenas *SIM* ou *NÃO* para que eu possa te direcionar corretamente. 😊` });
-            return;
-          }
-
-          console.log(`📦 Disparando kit de mídia de tráfego pago para ${cliente.nome || numeroPuro}`);
-
+          // 2. Envia o áudio explicativo (PTT: true faz parecer gravado na hora)
           await whatsappClient.sendMessage(jid, {
             audio: { url: './midias/audio_explicativo.ogg' },
             mimetype: 'audio/mp4',
             ptt: true 
           });
 
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // 3. Aguarda 4 segundos antes de mandar os catálogos
+          await new Promise(resolve => setTimeout(resolve, 4000));
 
+          // 4. Envia o Catálogo Feminino
           await whatsappClient.sendMessage(jid, {
             document: { url: './midias/catalogo_feminino.pdf' },
             mimetype: 'application/pdf',
             fileName: 'Catálogo Feminino - Ótica Luz.pdf'
           });
 
+          // Pequeno intervalo entre os arquivos
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          // 5. Envia o Catálogo Masculino
           await whatsappClient.sendMessage(jid, {
             document: { url: './midias/catalogo_masculino.pdf' },
             mimetype: 'application/pdf',
             fileName: 'Catálogo Masculino - Ótica Luz.pdf'
           });
 
-          await turso.execute({
-            sql: "UPDATE clientes SET etapa_chatbot = 'finalizado' WHERE id = ?",
-            args: [cliente.id]
-          });
+          console.log(`✅ Combo de mídias enviado com sucesso para: ${numeroPuro}`);
+
+          // Salva automaticamente o novo contato no Turso para manter o seu CRM atualizado
+          try {
+            await turso.execute({
+              sql: "INSERT OR IGNORE INTO clientes (telefone, origem, etapa_chatbot) VALUES (?, 'trafego_pago', 'finalizado')",
+              args: [numeroPuro]
+            });
+            console.log(`💾 Novo lead ${numeroPuro} salvo no banco como 'trafego_pago'.`);
+          } catch (dbErr) {
+            // Silencioso caso a tabela tenha campos obrigatórios adicionais
+          }
         }
 
       } catch (error) {
-        console.error('❌ Erro na execução do Chatbot de Tráfego Pago:', error);
+        console.error('❌ Erro no disparo automático por gatilho:', error);
       }
     });
 
