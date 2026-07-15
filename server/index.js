@@ -226,12 +226,8 @@ async function inicializarWhatsApp() {
 
       // 🚀 FORÇA O BAILEYS A IGNORAR MENSAGENS ANTIGAS DO HISTÓRICO:
       shouldSyncHistoryMessage: (msg) => {
-        // Se for o bootstrap inicial de sincronização de chaves, deixa passar
-        if (msg.syncType === 'INITIAL_BOOTSTRAP' || msg.syncType === 'NON_BLOCKING_DATA') {
-          return true;
-        }
-        // Bloqueia qualquer download de mensagens velhas e chats passados
-        return false;
+        // Permite apenas o mapeamento inicial necessário para a sessão não cair
+        return msg.syncType === 'INITIAL_BOOTSTRAP' || msg.syncType === 'NON_BLOCKING_DATA'
       },
       
       patchMessageBeforeSending: (msg) => {
