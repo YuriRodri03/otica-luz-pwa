@@ -158,8 +158,14 @@ async function inicializarWhatsApp() {
         set: async (data) => {
           let mudouAlgo = false;
           for (const type in data) {
-            // Salva apenas chaves essenciais de criptografia e login para não estourar a RAM do Render
-            if (type === 'app-state-sync-key' || type === 'session' || type === 'pre-key') {
+            // Permitir os tipos críticos de pareamento e criptografia do WhatsApp
+            if (
+              type === 'app-state-sync-key' || 
+              type === 'session' || 
+              type === 'pre-key' ||
+              type === 'sender-key' || // Crucial para mensagens de grupo/listas
+              type === 'app-state-sync-version'
+            ) {
               if (!chavesSalvas[type]) chavesSalvas[type] = {};
               for (const id in data[type]) {
                 if (data[type][id]) {
@@ -172,7 +178,6 @@ async function inicializarWhatsApp() {
               }
             }
           }
-          // Só faz requisição ao Turso se chaves realmente cruciais mudaram
           if (mudouAlgo) {
             await guardarSessaoNoBanco();
           }
@@ -200,17 +205,27 @@ async function inicializarWhatsApp() {
       version: version, 
       printQRInTerminal: false, 
       browser: ['Ótica Luz', 'Chrome', '126.0.0.0'], 
-      defaultQueryTimeoutMs: 90000, // 🚀 Aumentado para 90s (Dá tempo ao Render/Turso em conexões lentas)
+      defaultQueryTimeoutMs: 90000, 
       keepAliveIntervalMs: 30000, 
-      syncFullHistory: false, // Mantido falso para economizar RAM
-      markOnlineOnConnect: false, // 🚀 EVITA ERRO 515: Não força o status online durante o emparelhamento
       
-      // 🚀 CONFIGURAÇÕES CRÍTICAS DE ESTABILIDADE:
+      // 🚀 CONFIGURAÇÕES CRÍTICAS ANTITRAVAMENTO (HISTÓRICO):
+      syncFullHistory: false,             // Não sincroniza o histórico completo do celular
+      markOnlineOnConnect: false,         // Evita erro de timeout no handshake 
+      linkPreviewKeystore: null,          // Economiza memória RAM no Render
+
       options: {
-        timeout: 60000, // Aumenta o timeout do socket socket básico
+        timeout: 60000, 
       },
-      // Impede o Baileys de cair se o WhatsApp enviar dados estruturados antigos
-      shouldIgnoreJid: (jid) => jid.endsWith('@broadcast') || jid.includes('newsletter'), 
+
+      // 🚀 IGNORA GRUPOS E LISTAS DE TRANSMISSÃO PESADAS:
+      shouldIgnoreJid: (jid) => {
+        return jid.endsWith('@broadcast') || 
+               jid.includes('newsletter') || 
+               jid.endsWith('@g.us'); // Ignora grupos para liberar a CPU do Render
+      },
+
+      // 🚀 FORÇA O BAILEYS A IGNORAR MENSAGENS ANTIGAS DO HISTÓRICO:
+      shouldSyncHistoryMessage: () => false,
       
       patchMessageBeforeSending: (msg) => {
         const hasSender = !!(msg.message && (msg.message.buttonsMessage || msg.message.templateMessage || msg.message.listMessage));
