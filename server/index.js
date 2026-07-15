@@ -293,18 +293,19 @@ async function inicializarWhatsApp() {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+        
         // Identifica erros fatais de autenticação ou loops de stream corrompida (ex: 401, 403, 515)
         const sessaoInvalida = statusCode === DisconnectReason.loggedOut || 
                                statusCode === 401 || 
-                               statusCode === 403 || 
-                               statusCode === 515;
+                               statusCode === 403;
+                               
+        const streamErrored = statusCode === 515; // O erro específico que está dando no pareamento
         
-        console.log(`Conexão fechada. Código: ${statusCode}. Sessão inválida/corrompida? ${sessaoInvalida}`);
+        console.log(`Conexão fechada. Código: ${statusCode}. Sessão inválida? ${sessaoInvalida} | Stream Errored? ${streamErrored}`);
         statusConexao = 'Desconectado';
         qrCodeBase64 = null;
 
         if (sessaoInvalida) {
-          // 🧹 AUTO-LIMPEZA AUTOMÁTICA: O próprio server limpa a chave corrompida do Turso sem travar o loop
           console.log('🧹 [Auto-Limpeza] Removendo registro inválido do Turso de forma automatizada...');
           try {
             await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_full_session'");
@@ -312,6 +313,9 @@ async function inicializarWhatsApp() {
             console.log('Erro ao limpar banco:', e.message);
           }
           setTimeout(() => inicializarWhatsApp(), 3000);
+        } else if (streamErrored) {
+          console.log('⏳ [Estabilizador] Aguardando 12 segundos para consolidação do canal de criptografia...');
+          setTimeout(() => inicializarWhatsApp(), 12000);
         } else {
           setTimeout(() => inicializarWhatsApp(), 5000);
         }
