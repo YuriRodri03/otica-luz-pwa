@@ -194,10 +194,18 @@ async function inicializarWhatsApp() {
       version: version, 
       printQRInTerminal: false, 
       browser: ['Ótica Luz', 'Chrome', '126.0.0.0'], 
-      defaultQueryTimeoutMs: 60000, 
+      defaultQueryTimeoutMs: 90000, // 🚀 Aumentado para 90s (Dá tempo ao Render/Turso em conexões lentas)
       keepAliveIntervalMs: 30000, 
-      syncFullHistory: false, 
-      markOnlineOnConnect: true,
+      syncFullHistory: false, // Mantido falso para economizar RAM
+      markOnlineOnConnect: false, // 🚀 EVITA ERRO 515: Não força o status online durante o emparelhamento
+      
+      // 🚀 CONFIGURAÇÕES CRÍTICAS DE ESTABILIDADE:
+      options: {
+        timeout: 60000, // Aumenta o timeout do socket socket básico
+      },
+      // Impede o Baileys de cair se o WhatsApp enviar dados estruturados antigos
+      shouldIgnoreJid: (jid) => jid.endsWith('@broadcast') || jid.includes('newsletter'), 
+      
       patchMessageBeforeSending: (msg) => {
         const hasSender = !!(msg.message && (msg.message.buttonsMessage || msg.message.templateMessage || msg.message.listMessage));
         if (hasSender) {
