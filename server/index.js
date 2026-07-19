@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors'; 
 import { createClient } from '@libsql/client';
-import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, initAuthCreds } from '@whiskeysockets/baileys';
+import { makeWASocket, DisconnectReason, fetchLatestBaileysVersion, initAuthCreds, BufferJSON } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import dotenv from 'dotenv';
 
@@ -127,12 +127,8 @@ async function inicializarWhatsApp() {
     let dadosSessao = { creds: null, keys: {} };
     if (resSessao.rows && resSessao.rows[0]?.valor) {
       try {
-        dadosSessao = JSON.parse(resSessao.rows[0].valor, (key, value) => {
-          if (value && value.type === 'Buffer' && Array.isArray(value.data)) {
-            return Buffer.from(value.data);
-          }
-          return value;
-        });
+        // 🔥 USO CORRETO DO REVIVER DO BAILEYS PARA NÃO CORROMPER AS CHAVES
+        dadosSessao = JSON.parse(resSessao.rows[0].valor, BufferJSON.reviver);
         console.log("📖 [Persistência Nível 2] Sessão criptográfica perpétua carregada do Turso.");
       } catch (e) {
         console.log("⚠️ Erro ao decodificar sessão completa, iniciando limpo...");
@@ -142,7 +138,25 @@ async function inicializarWhatsApp() {
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
-    // 🔥 ENGENHARIA PERPÉTUA OTIMIZADA: Filtra dados essenciais e previne corrupção de payload no Turso
+    // 🔥 DEBOUNCE PARA NÃO DERRUBAR O TURSO E EVITAR O LOOP DE SINCRONIZAÇÃO
+    let saveTimeout = null;
+    const guardarSessaoNoBanco = async () => {
+      if (saveTimeout) clearTimeout(saveTimeout);
+      
+      saveTimeout = setTimeout(async () => {
+        try {
+          // Uso do replacer nativo do Baileys
+          const payload = JSON.stringify({ creds: state.creds, keys: chavesSalvas }, BufferJSON.replacer);
+          await turso.execute({
+            sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_full_session', ?)",
+            args: [payload]
+          });
+        } catch (err) {
+          console.error("❌ Erro ao salvar sessão completa no Turso:", err.message);
+        }
+      }, 2500); // Aguarda 2.5 segundos após a última alteração de chave para salvar tudo de uma vez
+    };
+
     const state = {
       creds: creds,
       keys: {
@@ -155,15 +169,14 @@ async function inicializarWhatsApp() {
           }
           return data;
         },
-        set: async (data) => {
+        set: (data) => {
           let mudouAlgo = false;
           for (const type in data) {
-            // Permitir os tipos críticos de pareamento e criptografia do WhatsApp
             if (
               type === 'app-state-sync-key' || 
               type === 'session' || 
               type === 'pre-key' ||
-              type === 'sender-key' || // Crucial para mensagens de grupo/listas
+              type === 'sender-key' || 
               type === 'app-state-sync-version'
             ) {
               if (!chavesSalvas[type]) chavesSalvas[type] = {};
@@ -179,11 +192,12 @@ async function inicializarWhatsApp() {
             }
           }
           if (mudouAlgo) {
-            await guardarSessaoNoBanco();
+             // Chamada síncrona, o setTimeout lidará com o assincronismo em background
+             guardarSessaoNoBanco();
           }
         }
       }
-    };
+    }
 
     const guardarSessaoNoBanco = async () => {
       try {
