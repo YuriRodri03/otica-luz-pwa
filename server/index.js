@@ -7,6 +7,17 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// ==========================================
+// 🛡️ ANTI-CRASH GLOBAL (Impede o servidor de morrer por erros não tratados)
+// ==========================================
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [ANTI-CRASH] Erro Global (uncaughtException):', err);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('⚠️ [ANTI-CRASH] Rejeição Global (unhandledRejection):', err);
+});
+
 const app = express();
 
 // ==========================================
@@ -53,7 +64,7 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const configs = { msg_aniversario: '', msg_pos_venda: '' };
     
-    // 🎯 CORREÇÃO CRÍTICA: Busca apenas as mensagens, sem puxar o payload gigante do WhatsApp
+    // 🎯 Busca apenas as mensagens
     const r = await turso.execute({
       sql: "SELECT chave, valor FROM configuracoes WHERE chave IN ('msg_aniversario', 'msg_pos_venda')",
       args: []
@@ -69,23 +80,30 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
     res.json(configs);
   } catch (error) {
     console.error('⚠️ [Erro GET] Falha ao ler templates no Turso:', error.message);
-    // 🎯 CORREÇÃO: Retorna um status de erro real (503) em vez de fingir sucesso com strings vazias
     res.status(503).json({ error: 'Banco de dados ocupado, tentando novamente...', detalhes: error.message });
   }
 });
 
-// Salva as configurações de mensagens de forma direta
+// Salva as configurações de mensagens de forma direta e isolada
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const { msg_aniversario, msg_pos_venda } = req.body;
-    await turso.execute({
-      sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
-      args: [String(msg_aniversario || '').trim()]
-    });
-    await turso.execute({
-      sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
-      args: [String(msg_pos_venda || '').trim()]
-    });
+    
+    // Atualiza apenas se foi enviado no payload
+    if (msg_aniversario !== undefined) {
+      await turso.execute({
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
+        args: [String(msg_aniversario).trim()]
+      });
+    }
+
+    if (msg_pos_venda !== undefined) {
+      await turso.execute({
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
+        args: [String(msg_pos_venda).trim()]
+      });
+    }
+
     res.json({ success: true, message: 'Modelos de mensagens salvos com sucesso!' });
   } catch (error) {
     res.status(500).json({ error: 'Erro interno ao salvar configurações', detalhes: error.message });
@@ -97,10 +115,14 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
   try {
     statusConexao = 'Desconectando...';
     await whatsappClient.logout();
+    
+    // 🎯 Limpar o banco de dados após forçar o logout
+    await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_full_session'");
+    
     statusConexao = 'Desconectado';
     qrCodeBase64 = null;
     whatsappClient = null;
-    res.json({ success: true, message: 'Sessão encerrada com sucesso.' });
+    res.json({ success: true, message: 'Sessão encerrada e limpa com sucesso.' });
     setTimeout(() => inicializarWhatsApp(), 3000);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -192,24 +214,11 @@ async function inicializarWhatsApp() {
             }
           }
           if (mudouAlgo) {
-             // Chamada síncrona, o setTimeout lidará com o assincronismo em background
              guardarSessaoNoBanco();
           }
         }
       }
     }
-
-    const guardarSessaoNoBanco = async () => {
-      try {
-        const payload = JSON.stringify({ creds: state.creds, keys: chavesSalvas });
-        await turso.execute({
-          sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_full_session', ?)",
-          args: [payload]
-        });
-      } catch (err) {
-        console.error("❌ Erro ao salvar sessão completa no Turso:", err.message);
-      }
-    };
 
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`Usando versão do WA: ${version.join('.')}, é a mais recente? ${isLatest}`);
@@ -342,6 +351,12 @@ async function inicializarWhatsApp() {
         console.log(`Conexão fechada. Código: ${statusCode}. Sessão inválida? ${sessaoInvalida} | Stream Errored? ${streamErrored}`);
         statusConexao = 'Desconectado';
         qrCodeBase64 = null;
+
+        // 🎯 Matando a instância velha para evitar "zumbis" na memória
+        if (whatsappClient) {
+            whatsappClient.ev.removeAllListeners();
+            whatsappClient = null;
+        }
 
         if (sessaoInvalida) {
           console.log('🧹 [Auto-Limpeza] Removendo registro inválido do Turso de forma automatizada...');
@@ -513,12 +528,3 @@ setInterval(() => {
   verificarAniversariantesDoDia();
   verificarPosVendaTrintaDias();
 }, 1000 * 60 * 60);
-
-setInterval(async () => {
-  try {
-    const urlAutoPingLocal = `http://localhost:${PORT}/`;
-    await fetch(urlAutoPingLocal);
-  } catch (e) {
-    // Mantém silencioso
-  }
-}, 1000 * 60 * 10);
