@@ -58,7 +58,7 @@ export default function Dashboard() {
         WHERE strftime('%Y', criado_em) = '${anoFiltroAnual}'
       `)
 
-      // 2. BUSCA DE ENTRADAS DIRETAS, PARCELAS DE CARNÊ PAGAS E DESPESAS OPERACIONAIS MÊS A MÊS
+      // 2. BUSCA CORRIGIDA DE ENTRADAS, PARCELAS E DESPESAS (Regime de Caixa Misto)
       const resFluxoAnual = await turso.execute(`
         SELECT 
           mes,
@@ -66,7 +66,14 @@ export default function Dashboard() {
           SUM(parcelas) as total_parcelas,
           SUM(despesas) as total_despesas
         FROM (
-          SELECT strftime('%m', criado_em) as mes, valor_entrada as entradas, 0 as parcelas, 0 as despesas 
+          SELECT 
+            strftime('%m', criado_em) as mes, 
+            CASE 
+              WHEN LOWER(metodo_venda) LIKE '%cred%' THEN valor_entrada 
+              ELSE total_liquido 
+            END as entradas, 
+            0 as parcelas, 
+            0 as despesas 
           FROM vendas 
           WHERE strftime('%Y', criado_em) = '${anoFiltroAnual}'
           
@@ -152,7 +159,7 @@ export default function Dashboard() {
       })
 
       // ==========================================
-      // 6. FECHAMENTO MENSAL CORRIGIDO (BUSCANDO PARCELAS DO MÊS)
+      // 6. FECHAMENTO MENSAL
       // ==========================================
       const mesFormatado = mesFiltro.toString().padStart(2, '0')
       
@@ -167,7 +174,7 @@ export default function Dashboard() {
       const listaVendas = resVendasMensais.rows
       setVendasMensais(listaVendas)
 
-      // 🔥 NOVA CONSULTA: Captura amortizações físicas de crediários pagas NESTE mês específico
+      // Captura amortizações físicas de crediários pagas NESTE mês específico
       const resParcelasMensais = await turso.execute(`
         SELECT 
           strftime('%d', CASE WHEN pago_em IS NULL OR TRIM(pago_em) = '' OR LOWER(pago_em) = 'none' OR LOWER(pago_em) = 'nan' THEN data_vencimento ELSE pago_em END) as dia, 
@@ -201,7 +208,7 @@ export default function Dashboard() {
       const CORES = ['#002060', '#D4AF37', '#8D6E63', '#AA7C11']
       setDadosPizza(resMetodos.rows.map((r, i) => ({ name: r.metodo_venda, value: r.total, color: CORES[i % CORES.length] })))
 
-      // Montando o Gráfico Diário Consolidando Vendas à Vista + Entradas + Parcelas Recebidas do Crediário
+      // Montando o Gráfico Diário Consolidando Vendas à Vista + Entradas + Parcelas Recebidas
       const diasNoMes = new Date(anoFiltro, mesFiltro, 0).getDate()
       const mapaDias = {}
       
@@ -209,17 +216,17 @@ export default function Dashboard() {
         mapaDias[i.toString().padStart(2, '0')] = { faturamentoCaixa: 0, despesasReal: 0 }
       }
 
-      // Adiciona entradas imediatas e vendas normais
+      // Adiciona entradas imediatas (Crediário) e vendas normais completas (Dinheiro/Cartão/Pix)
       listaVendas.forEach(v => {
         const dia = new Date(v.criado_em).getDate().toString().padStart(2, '0')
-        const valorEntradoEfetivo = v.metodo_venda?.toLowerCase().includes('cred') || v.metodo_venda?.toLowerCase().includes('x')
+        const valorEntradoEfetivo = v.metodo_venda?.toLowerCase().includes('cred')
           ? (v.valor_entrada || 0)
           : (v.total_liquido || 0)
           
         if (mapaDias[dia]) mapaDias[dia].faturamentoCaixa += valorEntradoEfetivo
       })
 
-      // 🔥 Adiciona os pagamentos de parcelas retroativas recebidas no dia correspondente
+      // Adiciona os pagamentos de parcelas recebidas no dia correspondente
       listaParcelasPagas.forEach(p => {
         if (mapaDias[p.dia]) mapaDias[p.dia].faturamentoCaixa += (p.valor_parcela || 0)
       })
@@ -249,16 +256,17 @@ export default function Dashboard() {
     return metodoFiltroTabela === 'todos' || v.metodo_venda === metodoFiltroTabela
   })
 
+  // Soma de todos os pedidos no mês, independente de estarem pagos (Competência)
   const faturamentoMensalTotal = vendasMensais.reduce((sum, v) => sum + v.total_liquido, 0)
   
-  // Total que entrou em dinheiro/PIX/Cartão + entradas de crediários
+  // Total exato que pingou no caixa (Dinheiro/PIX/Cartão Integral + Entradas de Crediário)
   const totalEntradasCaixaMensal = vendasMensais.reduce((sum, v) => {
-    return sum + (v.metodo_venda?.toLowerCase().includes('cred') || v.metodo_venda?.toLowerCase().includes('x')
+    return sum + (v.metodo_venda?.toLowerCase().includes('cred')
       ? (v.valor_entrada || 0)
       : (v.total_liquido || 0))
   }, 0)
   
-  // Caixa Líquido Real = (Entradas + Parcelas Recebidas no mês) - Despesas do mês
+  // Caixa Líquido Real = (Caixa Imediato + Parcelas do Carnê Recebidas) - Despesas do mês
   const caixaImediatoMensal = (totalEntradasCaixaMensal + totalParcelasPagasMes) - totalDespesasPagasMes
 
   if (carregando) {
