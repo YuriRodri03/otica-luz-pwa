@@ -485,14 +485,25 @@ export default function Clientes({ clientes = [], setClientes }) {
                   {vendasAgrupadas.map(venda => (
                     <div key={venda.id} className="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white">
                       <div className="p-4 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 select-none">
+                        
                         <div onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)} className="space-y-1.5 cursor-pointer w-full sm:flex-1 min-w-0">
-                          <p className="font-bold text-slate-700 text-xs sm:text-sm break-words">{venda.produtos}</p>
+                          
+                          {/* === OS INCORPORADA AQUI === */}
+                          <div className="flex items-center space-x-2">
+                            <span className="bg-slate-200/70 text-slate-600 font-extrabold px-2 py-0.5 rounded text-[10px] tracking-wider border border-slate-300">
+                              OS #{String(venda.id).padStart(5, '0')}
+                            </span>
+                            <p className="font-bold text-slate-700 text-xs sm:text-sm break-words">{venda.produtos}</p>
+                          </div>
+                          {/* ============================== */}
+
                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 font-medium">
                             <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" /> {formatarDataBR(venda.data)}</span>
                             <span>Tipo: <strong className="text-royalBlue">{venda.metodo}</strong></span>
                             {venda.entrada > 0 && <span className="text-emerald-600 font-bold">Entrad.: R$ {venda.entrada.toFixed(2)}</span>}
                           </div>
                         </div>
+
                         <div className="flex items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 shrink-0">
                           <p className="font-extrabold text-royalBlue text-sm sm:text-base">R$ {venda.totalVenda.toFixed(2)}</p>
                           <div className="flex items-center space-x-1.5">
