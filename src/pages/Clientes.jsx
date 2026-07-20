@@ -15,6 +15,8 @@ export default function Clientes({ clientes = [], setClientes }) {
 
   // Estado para controlar a data de pagamento de cada parcela individualmente (Padrão: hoje)
   const [datasPagamento, setDatasPagamento] = useState({})
+  // NOVO: Estado para controlar o valor efetivo pago na parcela (caso pague a mais ou a menos)
+  const [valoresPagamento, setValoresPagamento] = useState({})
 
   // Sub-modal expandido para retificação completa da venda
   const [modalVendaEdicao, setModalVendaEdicao] = useState({ 
@@ -84,18 +86,22 @@ export default function Clientes({ clientes = [], setClientes }) {
       })
 
       const datasIniciais = {}
+      const valoresIniciais = {} // NOVO: Armazena o valor padrão da parcela
       const hojeStr = new Date().toISOString().split('T')[0]
 
       resParcelas.rows.forEach(p => {
         datasIniciais[p.id] = hojeStr
+        valoresIniciais[p.id] = p.valor_parcela
       })
       setDatasPagamento(prev => ({ ...datasIniciais, ...prev }))
+      setValoresPagamento(prev => ({ ...valoresIniciais, ...prev })) // Atualiza estado com os valores originais
 
       const vendasFormatadas = resVendas.rows.map(vendaRow => {
         const parcelasDaVenda = resParcelas.rows
           .filter(p => p.venda_id === vendaRow.id)
           .map(p => ({
             id: p.id,
+            venda_id: p.venda_id, // Necessário para buscar outras parcelas da mesma venda
             numero: p.numero_parcela,
             valor: p.valor_parcela,
             vencimento: p.data_vencimento ? p.data_vencimento.split('T')[0] : '',
@@ -141,9 +147,6 @@ export default function Clientes({ clientes = [], setClientes }) {
     }
   }
 
-  // ==========================================
-  // SALVAR EDIÇÃO COMPLETA DA VENDA
-  // ==========================================
   const handleSalvarEditarVenda = async (e) => {
     e.preventDefault()
     const { id, produtos, metodo, subtotal, desconto, entrada, totalVenda } = modalVendaEdicao
@@ -195,22 +198,75 @@ export default function Clientes({ clientes = [], setClientes }) {
     })
   }
 
-  const baixarParcelaDoCliente = (parcela) => {
+  // ==========================================
+  // NOVA LÓGICA DE BAIXA DA PARCELA
+  // ==========================================
+  const baixarParcelaDoCliente = async (parcela) => {
     const dataEscolhida = datasPagamento[parcela.id] || new Date().toISOString().split('T')[0]
+    const valorPagoStr = valoresPagamento[parcela.id]
     
+    // Calcula a diferença caso o cliente pague a mais ou a menos
+    const valorPago = valorPagoStr !== undefined ? parseFloat(valorPagoStr) : parseFloat(parcela.valor)
+    const valorOriginal = parseFloat(parcela.valor)
+    const diferenca = valorOriginal - valorPago
+
+    // Busca parcelas futuras/pendentes desta mesma venda para redistribuir a diferença
+    let pendentes = []
+    try {
+      const res = await turso.execute({
+        sql: "SELECT * FROM parcelas_carne WHERE venda_id = ? AND status = 'Pendente' AND id != ?",
+        args: [parcela.venda_id, parcela.id]
+      })
+      pendentes = res.rows
+    } catch (e) {
+      console.error(e)
+    }
+
+    // Se houve diferença no pagamento e não tem parcelas futuras, barra a operação
+    if (Math.abs(diferenca) > 0.01 && pendentes.length === 0) {
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'aviso',
+        titulo: 'Redivisão Impossível',
+        mensagem: 'Esta é a última (ou única) parcela. Não há outras parcelas futuras para absorver essa diferença de valor. Pague o valor exato ou edite a venda total.',
+        onConfirmar: null
+      })
+      return
+    }
+
+    let mensagemConfirmacao = `Confirmar o recebimento da parcela número ${parcela.numero} no dia ${formatarDataBR(dataEscolhida)} pelo valor exato de R$ ${valorPago.toFixed(2)}?`
+    
+    if (Math.abs(diferenca) > 0.01) {
+      mensagemConfirmacao = `O valor original era R$ ${valorOriginal.toFixed(2)}, mas você está recebendo R$ ${valorPago.toFixed(2)}. A diferença de R$ ${Math.abs(diferenca).toFixed(2)} será dividida entre as ${pendentes.length} parcela(s) restante(s). Confirmar recebimento e reajuste automático?`
+    }
+
     setAlertaConfig({
       aberto: true,
       tipo: 'confirmacao',
       titulo: 'Liquidar Crediário',
-      mensagem: `Confirmar o recebimento da parcela número ${parcela.numero} efetuado no dia ${formatarDataBR(dataEscolhida)}?`,
+      mensagem: mensagemConfirmacao,
       onConfirmar: async () => {
         try {
+          // 1. Dar baixa na parcela atual com o valor que foi efetivamente pago
           await turso.execute({ 
-            sql: "UPDATE parcelas_carne SET status = 'Pago', pago_em = ? WHERE id = ?", 
-            args: [dataEscolhida, parcela.id] 
+            sql: "UPDATE parcelas_carne SET status = 'Pago', pago_em = ?, valor_parcela = ? WHERE id = ?", 
+            args: [dataEscolhida, valorPago, parcela.id] 
           })
+
+          // 2. Repassar a diferença para as próximas parcelas (se houver)
+          if (Math.abs(diferenca) > 0.01 && pendentes.length > 0) {
+            const ajustePorParcela = diferenca / pendentes.length
+            for (const p of pendentes) {
+              const novoValor = parseFloat(p.valor_parcela) + ajustePorParcela
+              await turso.execute({
+                sql: "UPDATE parcelas_carne SET valor_parcela = ? WHERE id = ?",
+                args: [parseFloat(novoValor.toFixed(2)), p.id]
+              })
+            }
+          }
+
           await carregarHistoricoVendasCliente(clienteSelecionado.id)
-          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Parcela Paga', mensagem: 'Recebimento homologado com sucesso.', onConfirmar: null })
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Parcela Liquidada', mensagem: 'Recebimento homologado e valores reajustados (se aplicável).', onConfirmar: null })
         } catch (error) {
           console.error(error)
         }
@@ -218,15 +274,12 @@ export default function Clientes({ clientes = [], setClientes }) {
     })
   }
 
-  // ==========================================
-  // OPERAÇÃO DE ESTORNO DE BAIXA DA PARCELA
-  // ==========================================
   const estornarBaixaParcela = (parcela) => {
     setAlertaConfig({
       aberto: true,
       tipo: 'confirmacao',
       titulo: 'Estornar Pagamento',
-      mensagem: `Deseja reverter a baixa da parcela número ${parcela.numero}? O status retornará para 'Pendente'.`,
+      mensagem: `Deseja reverter a baixa da parcela número ${parcela.numero}? O status retornará para 'Pendente'. (Obs: Estornos não revertem automaticamente a redivisão de outras parcelas).`,
       onConfirmar: async () => {
         try {
           await turso.execute({
@@ -476,21 +529,37 @@ export default function Clientes({ clientes = [], setClientes }) {
                                     )}
                                   </div>
                                   <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-dashed border-slate-100">
-                                    <p className="font-bold text-slate-800">R$ {parseFloat(parc.valor).toFixed(2)}</p>
+                                    <p className="font-bold text-slate-800 shrink-0 min-w-[70px] text-right">
+                                      R$ {parseFloat(parc.valor).toFixed(2)}
+                                    </p>
                                     <div className="flex items-center space-x-2">
                                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{parc.status}</span>
                                       
+                                      {/* ATUALIZADO: Layout de recebimento inline */}
                                       {parc.status !== 'Pago' ? (
-                                        <div className="flex items-center space-x-2 bg-slate-50 p-1 rounded-md border border-slate-200">
-                                          <input 
-                                            type="date" 
-                                            className="border-0 bg-transparent text-[11px] font-medium text-slate-700 focus:outline-none p-0.5"
-                                            value={datasPagamento[parc.id] || ''} 
-                                            onChange={(e) => setDatasPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
-                                          />
+                                        <div className="flex flex-col sm:flex-row items-center bg-slate-50 p-1.5 rounded-md border border-slate-200 gap-2 sm:gap-1.5 mt-2 sm:mt-0 shadow-sm">
+                                          <div className="flex flex-col w-full sm:w-auto">
+                                            <span className="text-[9px] text-slate-500 font-bold uppercase px-1">Valor Pago (R$)</span>
+                                            <input 
+                                              type="number"
+                                              step="0.01"
+                                              className="border border-slate-200 bg-white rounded text-[11px] font-bold text-royalBlue focus:outline-none focus:border-royalBlue p-1 w-full sm:w-20"
+                                              value={valoresPagamento[parc.id] !== undefined ? valoresPagamento[parc.id] : parc.valor}
+                                              onChange={(e) => setValoresPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
+                                            />
+                                          </div>
+                                          <div className="flex flex-col w-full sm:w-auto sm:border-l border-slate-200 sm:pl-1.5">
+                                            <span className="text-[9px] text-slate-500 font-bold uppercase px-1">Data Rec.</span>
+                                            <input 
+                                              type="date" 
+                                              className="border border-slate-200 bg-white rounded text-[11px] font-medium text-slate-700 focus:outline-none focus:border-royalBlue p-1 w-full sm:w-auto"
+                                              value={datasPagamento[parc.id] || ''} 
+                                              onChange={(e) => setDatasPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
+                                            />
+                                          </div>
                                           <button 
                                             onClick={() => baixarParcelaDoCliente(parc)} 
-                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-2.5 py-1 rounded transition-colors shadow-sm"
+                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-3 py-1.5 rounded transition-colors w-full sm:w-auto mt-1 sm:mt-0 self-end"
                                           >
                                             Liquidar
                                           </button>

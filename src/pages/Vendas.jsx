@@ -20,14 +20,15 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
   const [desconto, setDesconto] = useState('') 
   const [valorEntrada, setValorEntrada] = useState('')
   const [numParcelas, setNumParcelas] = useState(1)
-  const [diaVencimento, setDiaVencimento] = useState(10)
+  
+  // Novas variáveis para Cartão e Crediário
+  const [parcelasCartao, setParcelasCartao] = useState(1)
+  const [dataPrimeiraParcela, setDataPrimeiraParcela] = useState('')
 
-  // ==========================================
   // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
-  // ==========================================
   const [alertaConfig, setAlertaConfig] = useState({
     aberto: false,
-    tipo: 'aviso', // 'confirmacao' | 'erro' | 'sucesso'
+    tipo: 'aviso', 
     titulo: '',
     mensagem: '',
     onConfirmar: null
@@ -77,14 +78,30 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
     e.preventDefault()
     if (!clienteSelecionado || carrinho.length === 0) return
 
+    if (metodoVenda === 'Crediário' && !dataPrimeiraParcela) {
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'aviso',
+        titulo: 'Atenção',
+        mensagem: 'Por favor, selecione a data da primeira parcela do carnê.',
+        onConfirmar: null
+      });
+      return;
+    }
+
     setAlertaConfig({
       aberto: true,
       tipo: 'confirmacao',
       titulo: 'Finalizar Checkout',
-      mensagem: `Confirma o fechamento da venda de R$ ${totalComDesconto.toFixed(2)} para o cliente ${clienteSelecionado.nome} no método ${metodoVenda}?`,
+      mensagem: `Confirma o fechamento da venda de R$ ${totalComDesconto.toFixed(2)} para o cliente ${clienteSelecionado.nome}?`,
       onConfirmar: async () => {
         const produtosResSummary = carrinho.map(item => item.produto).join(', ')
         const dataOcorrencia = new Date(`${dataVenda}T12:00:00`).toISOString()
+        
+        // Concatena a quantidade de parcelas se for cartão de crédito
+        const metodoFinal = (metodoVenda === 'Cartão de Crédito' && parcelasCartao > 1) 
+          ? `Cartão de Crédito (${parcelasCartao}x)` 
+          : metodoVenda;
 
         try {
           const resVenda = await turso.execute({
@@ -98,7 +115,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               valorDesconto, 
               totalComDesconto, 
               entrada, 
-              metodoVenda, 
+              metodoFinal, 
               dataOcorrencia
             ]
           })
@@ -106,9 +123,11 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
           const vendaId = resVenda.lastInsertRowid
 
           if (metodoVenda === 'Crediário' && valorFinanciado > 0) {
-            const dataOrigem = new Date(`${dataVenda}T12:00:00`)
+            const [anoVenc, mesVenc, diaVenc] = dataPrimeiraParcela.split('-').map(Number);
+            
             for (let i = 1; i <= numParcelas; i++) {
-              let dataVenc = new Date(dataOrigem.getFullYear(), dataOrigem.getMonth() + i, diaVencimento)
+              // Ajusta o mês iterativamente. O (mesVenc - 1) é porque os meses no Date começam do zero.
+              let dataVenc = new Date(anoVenc, (mesVenc - 1) + (i - 1), diaVenc);
               
               await turso.execute({
                 sql: "INSERT INTO parcelas_carne (venda_id, numero_parcela, valor_parcela, data_vencimento, status) VALUES (?, ?, ?, ?, ?)",
@@ -131,6 +150,8 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
           setDesconto('')
           setValorEntrada('')
           setNumParcelas(1)
+          setParcelasCartao(1)
+          setDataPrimeiraParcela('')
           setDataVenda(new Date().toISOString().split('T')[0]) 
           setModalAberto(false)
 
@@ -160,26 +181,35 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
       <form onSubmit={handleSalvarVenda} className="p-4 sm:p-6 space-y-5 max-h-[85vh] overflow-y-auto w-full">
         
         {/* SELETOR DE DATA DA VENDA E CONDICIONAIS DE TOPO RESPONSIVOS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 relative">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 relative">
           
-          {/* Pesquisa / Seleção de Cliente */}
-          <div className="relative col-span-1 sm:col-span-2 lg:col-span-1">
+          {/* Pesquisa / Seleção de Cliente AMPLIADA */}
+          <div className="relative col-span-1 sm:col-span-2">
             {clienteSelecionado ? (
               <div>
                 <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Cliente Selecionado</label>
-                <input 
-                  type="text" 
-                  className="w-full bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs sm:text-sm text-emerald-800 font-medium cursor-not-allowed h-10 flex items-center"
-                  value={clienteSelecionado.nome}
-                  disabled
-                />
+                <div className="flex space-x-2">
+                  <input 
+                    type="text" 
+                    className="w-full bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs sm:text-sm text-emerald-800 font-medium cursor-not-allowed h-10 flex items-center"
+                    value={`${clienteSelecionado.nome} (CPF: ${clienteSelecionado.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")})`}
+                    disabled
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => { setClienteSelecionado(null); setBuscaCliente(''); }} 
+                    className="bg-rose-50 text-rose-600 border border-rose-200 text-xs font-bold px-4 rounded-lg hover:bg-rose-100 transition-colors shrink-0 h-10"
+                  >
+                    Trocar
+                  </button>
+                </div>
               </div>
             ) : (
               <div>
                 <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Pesquisar Nome ou CPF do Cliente</label>
                 <input 
                   type="text" 
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white h-10" 
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white h-12" 
                   placeholder="Digite para buscar..."
                   value={buscaCliente}
                   onChange={(e) => setBuscaCliente(e.target.value)}
@@ -190,9 +220,9 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               </div>
             )}
 
-            {/* Menu Dropdown Flutuante Otimizado */}
+            {/* Menu Dropdown Flutuante Otimizado e com Quebra de Linha */}
             {focoBusca && clientesSugeridos.length > 0 && (
-              <div className="absolute left-0 right-0 bg-white border border-slate-200 mt-1 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50 divide-y divide-slate-100">
+              <div className="absolute left-0 right-0 bg-white border border-slate-200 mt-1 rounded-lg shadow-xl max-h-60 overflow-y-auto z-50 divide-y divide-slate-100">
                 {clientesSugeridos.map(c => (
                   <div 
                     key={c.id}
@@ -200,50 +230,12 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                       setClienteSelecionado(c)
                       setFocoBusca(false)
                     }}
-                    className="p-2.5 text-xs hover:bg-slate-50 cursor-pointer flex flex-col sm:flex-row sm:justify-between text-slate-700 gap-0.5"
+                    className="p-3 text-xs hover:bg-slate-50 cursor-pointer flex flex-col text-slate-700 gap-1"
                   >
-                    <span className="font-semibold truncate">{c.nome}</span>
-                    <span className="text-slate-400 text-[10px] sm:text-xs shrink-0">CPF: {c.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
+                    <span className="font-semibold whitespace-normal break-words leading-tight">{c.nome}</span>
+                    <span className="text-slate-400 text-[10px] sm:text-xs shrink-0 font-mono">CPF: {c.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
                   </div>
                 ))}
-              </div>
-            )}
-          </div>
-
-          {/* CPF do Cliente ou Método de Pagamento */}
-          <div className="col-span-1">
-            {clienteSelecionado ? (
-              <div>
-                <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">CPF do Cliente</label>
-                <div className="flex space-x-2">
-                  <input 
-                    type="text" 
-                    className="w-full bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs sm:text-sm text-emerald-800 font-mono cursor-not-allowed h-10 flex items-center"
-                    value={clienteSelecionado.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}
-                    disabled
-                  />
-                  <button 
-                    type="button" 
-                    onClick={() => { setClienteSelecionado(null); setBuscaCliente(''); }} 
-                    className="bg-rose-50 text-rose-600 border border-rose-200 text-xs font-bold px-3 rounded-lg hover:bg-rose-100 transition-colors shrink-0 h-10"
-                  >
-                    Limpar
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Liquidação</label>
-                <select 
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold focus:outline-none focus:border-royalBlue text-slate-700 bg-white h-10 cursor-pointer"
-                  value={metodoVenda}
-                  onChange={(e) => setMetodoVenda(e.target.value)}
-                >
-                  <option value="Dinheiro">Dinheiro</option>
-                  <option value="Pix">Pix</option>
-                  <option value="Cartão de Crédito">Cartão de Crédito</option>
-                  <option value="Crediário">Crediário / Carnê Próprio</option>
-                </select>
               </div>
             )}
           </div>
@@ -260,12 +252,9 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             />
           </div>
 
-        </div>
-
-        {/* FORMA DE PAGAMENTO MOVIDA SE CLIENTE SELECIONADO */}
-        {clienteSelecionado && (
-          <div className="w-full">
-            <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Liquidação</label>
+          {/* FORMA DE LIQUIDAÇÃO */}
+          <div className="col-span-1">
+            <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Pagamento</label>
             <select 
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm font-semibold focus:outline-none focus:border-royalBlue text-slate-700 bg-white h-10 cursor-pointer"
               value={metodoVenda}
@@ -277,7 +266,21 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               <option value="Crediário">Crediário / Carnê Próprio</option>
             </select>
           </div>
-        )}
+
+          {/* QUANTIDADE DE PARCELAS NO CARTÃO (Aparece apenas se Cartão selecionado) */}
+          {metodoVenda === 'Cartão de Crédito' && (
+            <div className="col-span-1 sm:col-span-2 p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center justify-between">
+              <span className="text-xs font-medium text-blue-800">Em quantas vezes no cartão?</span>
+              <input 
+                type="number" 
+                min="1"
+                className="border border-blue-200 bg-white rounded-md px-2 py-1.5 text-xs font-bold focus:outline-none text-center focus:border-royalBlue w-20"
+                value={parcelasCartao}
+                onChange={(e) => setParcelasCartao(parseInt(e.target.value) || 1)}
+              />
+            </div>
+          )}
+        </div>
 
         {/* ADICIONAR PRODUTOS RESPONSIVO */}
         <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
@@ -364,20 +367,18 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Dia do Vencimento</label>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Data da 1ª Parcela</label>
                 <input 
-                  type="number" 
-                  min="1" 
-                  max="31"
-                  className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none text-center focus:border-royalBlue"
-                  value={diaVencimento}
-                  onChange={(e) => setDiaVencimento(parseInt(e.target.value) || 10)}
+                  type="date" 
+                  className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:border-royalBlue"
+                  value={dataPrimeiraParcela}
+                  onChange={(e) => setDataPrimeiraParcela(e.target.value)}
                 />
               </div>
             </div>
-            {valorFinanciado > 0 && (
+            {valorFinanciado > 0 && dataPrimeiraParcela && (
               <p className="text-[10px] sm:text-[11px] font-medium text-wood-dark/90 italic bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">
-                Do total líquido, <span className="font-bold text-emerald-600">R$ {entrada.toFixed(2)}</span> entram à vista no caixa. O saldo restante de <span className="font-bold text-royalBlue">R$ {valorFinanciado.toFixed(2)}</span> gerará <span className="font-bold">{numParcelas}x de R$ {valorPorParcela.toFixed(2)}</span> vencendo todo dia {diaVencimento}.
+                Do total líquido, <span className="font-bold text-emerald-600">R$ {entrada.toFixed(2)}</span> entram à vista no caixa. O saldo restante de <span className="font-bold text-royalBlue">R$ {valorFinanciado.toFixed(2)}</span> gerará <span className="font-bold">{numParcelas}x de R$ {valorPorParcela.toFixed(2)}</span> a partir de {dataPrimeiraParcela.split('-').reverse().join('/')}.
               </p>
             )}
           </div>
