@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // ==========================================
-// 🛡️ ANTI-CRASH GLOBAL (Impede o servidor de morrer por erros não tratados)
+// 🛡️ ANTI-CRASH GLOBAL
 // ==========================================
 process.on('uncaughtException', (err) => {
   console.error('⚠️ [ANTI-CRASH] Erro Global (uncaughtException):', err);
@@ -32,7 +32,6 @@ app.use(cors({
 
 const PORT = process.env.PORT || 8080;
 
-// Conexão com o banco Turso (Limpa para evitar bugs de lote)
 const turso = createClient({
   url: process.env.TURSO_DATABASE_URL,
   authToken: process.env.TURSO_AUTH_TOKEN,
@@ -59,12 +58,9 @@ app.get('/api/whatsapp/status', (req, res) => {
   });
 });
 
-// Carrega os dados tratando de forma direta o retorno das linhas
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const configs = { msg_aniversario: '', msg_pos_venda: '' };
-    
-    // 🎯 Busca apenas as mensagens
     const r = await turso.execute({
       sql: "SELECT chave, valor FROM configuracoes WHERE chave IN ('msg_aniversario', 'msg_pos_venda')",
       args: []
@@ -84,12 +80,10 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   }
 });
 
-// Salva as configurações de mensagens de forma direta e isolada
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
     const { msg_aniversario, msg_pos_venda } = req.body;
     
-    // Atualiza apenas se foi enviado no payload
     if (msg_aniversario !== undefined) {
       await turso.execute({
         sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_aniversario', ?)",
@@ -116,7 +110,6 @@ app.post('/api/whatsapp/desconectar', async (req, res) => {
     statusConexao = 'Desconectando...';
     await whatsappClient.logout();
     
-    // 🎯 Limpar o banco de dados após forçar o logout
     await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_full_session'");
     
     statusConexao = 'Desconectado';
@@ -137,7 +130,7 @@ app.listen(PORT, () => {
 });
 
 // ==========================================
-// 4. INICIALIZAÇÃO DO WHATSAPP (SESSÃO INFINITA DE ALTÍSSIMA PERFORMANCE)
+// 4. INICIALIZAÇÃO DO WHATSAPP
 // ==========================================
 
 async function inicializarWhatsApp() {
@@ -149,7 +142,6 @@ async function inicializarWhatsApp() {
     let dadosSessao = { creds: null, keys: {} };
     if (resSessao.rows && resSessao.rows[0]?.valor) {
       try {
-        // 🔥 USO CORRETO DO REVIVER DO BAILEYS PARA NÃO CORROMPER AS CHAVES
         dadosSessao = JSON.parse(resSessao.rows[0].valor, BufferJSON.reviver);
         console.log("📖 [Persistência Nível 2] Sessão criptográfica perpétua carregada do Turso.");
       } catch (e) {
@@ -160,14 +152,16 @@ async function inicializarWhatsApp() {
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
-    // 🔥 DEBOUNCE PARA NÃO DERRUBAR O TURSO E EVITAR O LOOP DE SINCRONIZAÇÃO
+    // 🔥 CORREÇÃO: Debounce ajustado e adição de Lock (isSaving) para evitar corromper o JSON
     let saveTimeout = null;
+    let isSaving = false;
     const guardarSessaoNoBanco = async () => {
       if (saveTimeout) clearTimeout(saveTimeout);
       
       saveTimeout = setTimeout(async () => {
+        if (isSaving) return;
+        isSaving = true;
         try {
-          // Uso do replacer nativo do Baileys
           const payload = JSON.stringify({ creds: state.creds, keys: chavesSalvas }, BufferJSON.replacer);
           await turso.execute({
             sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('whatsapp_full_session', ?)",
@@ -175,8 +169,10 @@ async function inicializarWhatsApp() {
           });
         } catch (err) {
           console.error("❌ Erro ao salvar sessão completa no Turso:", err.message);
+        } finally {
+          isSaving = false;
         }
-      }, 2500); // Aguarda 2.5 segundos após a última alteração de chave para salvar tudo de uma vez
+      }, 1500);
     };
 
     const state = {
@@ -194,22 +190,15 @@ async function inicializarWhatsApp() {
         set: (data) => {
           let mudouAlgo = false;
           for (const type in data) {
-            if (
-              type === 'app-state-sync-key' || 
-              type === 'session' || 
-              type === 'pre-key' ||
-              type === 'sender-key' || 
-              type === 'app-state-sync-version'
-            ) {
-              if (!chavesSalvas[type]) chavesSalvas[type] = {};
-              for (const id in data[type]) {
-                if (data[type][id]) {
-                  chavesSalvas[type][id] = data[type][id];
-                  mudouAlgo = true;
-                } else if (chavesSalvas[type][id]) {
-                  delete chavesSalvas[type][id];
-                  mudouAlgo = true;
-                }
+            // 🔥 CORREÇÃO: Removido o filtro de IF. O Baileys precisa salvar TODAS as chaves (inclusive as do tipo 'record')
+            if (!chavesSalvas[type]) chavesSalvas[type] = {};
+            for (const id in data[type]) {
+              if (data[type][id]) {
+                chavesSalvas[type][id] = data[type][id];
+                mudouAlgo = true;
+              } else if (chavesSalvas[type][id]) {
+                delete chavesSalvas[type][id];
+                mudouAlgo = true;
               }
             }
           }
@@ -231,27 +220,23 @@ async function inicializarWhatsApp() {
       defaultQueryTimeoutMs: 90000, 
       keepAliveIntervalMs: 30000, 
       
-      // 🚀 CONFIGURAÇÕES CRÍTICAS ANTITRAVAMENTO (HISTÓRICO):
-      syncFullHistory: false,             // Não sincroniza o histórico completo do celular
-      markOnlineOnConnect: false,         // Evita erro de timeout no handshake 
-      linkPreviewKeystore: null,          // Economiza memória RAM no Render
+      syncFullHistory: false,             // Impede o download completo do celular 
+      markOnlineOnConnect: true,          // 🔥 Ajuda a destravar o "Sincronizando" no celular mais rápido
+      linkPreviewKeystore: null, 
 
       options: {
         timeout: 60000, 
       },
 
-      // 🚀 IGNORA GRUPOS E LISTAS DE TRANSMISSÃO PESADAS:
       shouldIgnoreJid: (jid) => {
         return jid.endsWith('@broadcast') || 
                jid.includes('newsletter') || 
-               jid.endsWith('@g.us'); // Ignora grupos para liberar a CPU do Render
+               jid.endsWith('@g.us');
       },
 
-      // 🚀 FORÇA O BAILEYS A IGNORAR MENSAGENS ANTIGAS DO HISTÓRICO:
-      shouldSyncHistoryMessage: (msg) => {
-        // Permite apenas o mapeamento inicial necessário para a sessão não cair
-        return msg.syncType === 'INITIAL_BOOTSTRAP' || msg.syncType === 'NON_BLOCKING_DATA'
-      },
+      // 🔥 CORREÇÃO: A função shouldSyncHistoryMessage foi removida.
+      // O Baileys vai receber os pacotes do celular, responder que recebeu (ACK) e descartar por causa do syncFullHistory: false.
+      // Isso é o que evita o celular ficar em loop aguardando retorno.
       
       patchMessageBeforeSending: (msg) => {
         const hasSender = !!(msg.message && (msg.message.buttonsMessage || msg.message.templateMessage || msg.message.listMessage));
@@ -263,7 +248,7 @@ async function inicializarWhatsApp() {
     });
 
     // ==========================================
-    // 🤖 DISPARADOR AUTOMÁTICO DE MÍDIAS VIA TEXTO-GATILHO DO TRÁFEGO PAGO
+    // 🤖 DISPARADOR AUTOMÁTICO DE MÍDIAS
     // ==========================================
     whatsappClient.ev.on('messages.upsert', async (m) => {
       try {
@@ -273,7 +258,6 @@ async function inicializarWhatsApp() {
         const jid = msg.key.remoteJid;
         if (!jid.endsWith('@s.whatsapp.net')) return; 
 
-        // Captura o texto recebido normalizando quebras de linha invisíveis
         const textoRecebido = (msg.message.conversation || msg.message.extendedTextMessage?.text || '')
           .replace(/\r\n/g, '\n')
           .trim();
@@ -341,18 +325,16 @@ async function inicializarWhatsApp() {
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error)?.output?.statusCode;
         
-        // Identifica erros fatais de autenticação ou loops de stream corrompida (ex: 401, 403, 515)
         const sessaoInvalida = statusCode === DisconnectReason.loggedOut || 
                                statusCode === 401 || 
                                statusCode === 403;
                                
-        const streamErrored = statusCode === 515; // O erro específico que está dando no pareamento
+        const streamErrored = statusCode === 515; 
         
         console.log(`Conexão fechada. Código: ${statusCode}. Sessão inválida? ${sessaoInvalida} | Stream Errored? ${streamErrored}`);
         statusConexao = 'Desconectado';
         qrCodeBase64 = null;
 
-        // 🎯 Matando a instância velha para evitar "zumbis" na memória
         if (whatsappClient) {
             whatsappClient.ev.removeAllListeners();
             whatsappClient = null;
