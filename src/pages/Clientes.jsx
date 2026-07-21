@@ -9,13 +9,17 @@ export default function Clientes({ clientes = [], setClientes }) {
   const [termoBusca, setTermoBusca] = useState('')
   const [idEdicao, setIdEdicao] = useState(null)
 
+  // NOVOS ESTADOS PARA BUSCA DE OS
+  const [termoBuscaOSGlobal, setTermoBuscaOSGlobal] = useState('')
+  const [termoBuscaOSLocal, setTermoBuscaOSLocal] = useState('')
+
   // Histórico estruturado por Vendas agrupadas
   const [vendasAgrupadas, setVendasAgrupadas] = useState([])
   const [vendaAbertaId, setVendaAbertaId] = useState(null)
 
-  // Estado para controlar a data de pagamento de cada parcela individualmente (Padrão: hoje)
+  // Estado para controlar a data de pagamento de cada parcela individualmente
   const [datasPagamento, setDatasPagamento] = useState({})
-  // NOVO: Estado para controlar o valor efetivo pago na parcela (caso pague a mais ou a menos)
+  // Estado para controlar o valor efetivo pago na parcela
   const [valoresPagamento, setValoresPagamento] = useState({})
 
   // Sub-modal expandido para retificação completa da venda
@@ -73,6 +77,14 @@ export default function Clientes({ clientes = [], setClientes }) {
     carregarClientesDoBanco()
   }, [])
 
+  // Limpa as buscas quando muda de cliente
+  useEffect(() => {
+    if (!clienteSelecionado) {
+      setTermoBuscaOSLocal('')
+      setTermoBuscaOSGlobal('')
+    }
+  }, [clienteSelecionado])
+
   const carregarHistoricoVendasCliente = async (clienteId) => {
     try {
       const resVendas = await turso.execute({
@@ -86,7 +98,7 @@ export default function Clientes({ clientes = [], setClientes }) {
       })
 
       const datasIniciais = {}
-      const valoresIniciais = {} // NOVO: Armazena o valor padrão da parcela
+      const valoresIniciais = {} 
       const hojeStr = new Date().toISOString().split('T')[0]
 
       resParcelas.rows.forEach(p => {
@@ -94,14 +106,14 @@ export default function Clientes({ clientes = [], setClientes }) {
         valoresIniciais[p.id] = p.valor_parcela
       })
       setDatasPagamento(prev => ({ ...datasIniciais, ...prev }))
-      setValoresPagamento(prev => ({ ...valoresIniciais, ...prev })) // Atualiza estado com os valores originais
+      setValoresPagamento(prev => ({ ...valoresIniciais, ...prev })) 
 
       const vendasFormatadas = resVendas.rows.map(vendaRow => {
         const parcelasDaVenda = resParcelas.rows
           .filter(p => p.venda_id === vendaRow.id)
           .map(p => ({
             id: p.id,
-            venda_id: p.venda_id, // Necessário para buscar outras parcelas da mesma venda
+            venda_id: p.venda_id, 
             numero: p.numero_parcela,
             valor: p.valor_parcela,
             vencimento: p.data_vencimento ? p.data_vencimento.split('T')[0] : '',
@@ -144,6 +156,37 @@ export default function Clientes({ clientes = [], setClientes }) {
       setTelefone(limpo.replace(/(\d{2})(\d{4})(\d{4})/, "($1) $2-$3"))
     } else {
       setTelefone(limpo.replace(/(\d{2})(\d{5})(\d{4})/, "($1) $2-$3"))
+    }
+  }
+
+  // NOVA FUNÇÃO: Busca Cliente Pela OS no Banco
+  const buscarClientePorOS = async (e) => {
+    e.preventDefault()
+    const osLimpa = termoBuscaOSGlobal.replace(/\D/g, '')
+    if (!osLimpa) return
+
+    setCarregando(true)
+    try {
+      const res = await turso.execute({
+        sql: "SELECT cliente_id FROM vendas WHERE id = ?",
+        args: [parseInt(osLimpa)]
+      })
+
+      if (res.rows.length > 0) {
+        const clienteId = res.rows[0].cliente_id
+        const cliente = clientes.find(c => c.id === clienteId)
+        if (cliente) {
+          setClienteSelecionado(cliente)
+        } else {
+          setAlertaConfig({ aberto: true, tipo: 'aviso', titulo: 'Erro de Sincronia', mensagem: 'OS encontrada, mas o cliente não está na lista atual.', onConfirmar: null })
+        }
+      } else {
+        setAlertaConfig({ aberto: true, tipo: 'aviso', titulo: 'OS Não Encontrada', mensagem: `Nenhuma venda foi registrada com a OS #${String(osLimpa).padStart(5, '0')}.`, onConfirmar: null })
+      }
+    } catch (error) {
+      console.error("Erro ao buscar OS:", error)
+    } finally {
+      setCarregando(false)
     }
   }
 
@@ -198,19 +241,14 @@ export default function Clientes({ clientes = [], setClientes }) {
     })
   }
 
-  // ==========================================
-  // NOVA LÓGICA DE BAIXA DA PARCELA
-  // ==========================================
   const baixarParcelaDoCliente = async (parcela) => {
     const dataEscolhida = datasPagamento[parcela.id] || new Date().toISOString().split('T')[0]
     const valorPagoStr = valoresPagamento[parcela.id]
     
-    // Calcula a diferença caso o cliente pague a mais ou a menos
     const valorPago = valorPagoStr !== undefined ? parseFloat(valorPagoStr) : parseFloat(parcela.valor)
     const valorOriginal = parseFloat(parcela.valor)
     const diferenca = valorOriginal - valorPago
 
-    // Busca parcelas futuras/pendentes desta mesma venda para redistribuir a diferença
     let pendentes = []
     try {
       const res = await turso.execute({
@@ -222,7 +260,6 @@ export default function Clientes({ clientes = [], setClientes }) {
       console.error(e)
     }
 
-    // Se houve diferença no pagamento e não tem parcelas futuras, barra a operação
     if (Math.abs(diferenca) > 0.01 && pendentes.length === 0) {
       setAlertaConfig({
         aberto: true,
@@ -247,13 +284,11 @@ export default function Clientes({ clientes = [], setClientes }) {
       mensagem: mensagemConfirmacao,
       onConfirmar: async () => {
         try {
-          // 1. Dar baixa na parcela atual com o valor que foi efetivamente pago
           await turso.execute({ 
             sql: "UPDATE parcelas_carne SET status = 'Pago', pago_em = ?, valor_parcela = ? WHERE id = ?", 
             args: [dataEscolhida, valorPago, parcela.id] 
           })
 
-          // 2. Repassar a diferença para as próximas parcelas (se houver)
           if (Math.abs(diferenca) > 0.01 && pendentes.length > 0) {
             const ajustePorParcela = diferenca / pendentes.length
             for (const p of pendentes) {
@@ -410,6 +445,13 @@ export default function Clientes({ clientes = [], setClientes }) {
     })
     .sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')))
 
+  // FILTRA AS VENDAS PELA OS (LOCAL)
+  const vendasFiltradas = vendasAgrupadas.filter(venda => {
+    if (!termoBuscaOSLocal) return true
+    const buscaLimpa = termoBuscaOSLocal.replace(/\D/g, '')
+    return String(venda.id).includes(buscaLimpa)
+  })
+
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-full overflow-hidden">
       
@@ -445,7 +487,7 @@ export default function Clientes({ clientes = [], setClientes }) {
       {carregando && abaAtiva === 'lista' && !clienteSelecionado && (
         <div className="flex flex-col items-center justify-center p-8 bg-white rounded-xl border border-slate-200 shadow-sm text-center">
           <Loader2 className="w-8 h-8 text-royalBlue animate-spin mb-2" />
-          <p className="text-xs sm:text-sm text-slate-500">Sincronizando com a base de dados...</p>
+          <p className="text-xs sm:text-sm text-slate-500">Buscando na base de dados...</p>
         </div>
       )}
 
@@ -475,27 +517,43 @@ export default function Clientes({ clientes = [], setClientes }) {
             </div>
 
             <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-6">
-              <div className="flex items-center space-x-2 mb-6 border-b border-slate-100 pb-3">
-                <ShoppingBag className="w-5 h-5 text-gold shrink-0" />
-                <h3 className="font-bold text-royalBlue text-base sm:text-lg">Histórico de Compras Realizadas</h3>
+              
+              {/* FILTRO LOCAL DE OS MODIFICADO */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 border-b border-slate-100 pb-3 gap-3">
+                <div className="flex items-center space-x-2">
+                  <ShoppingBag className="w-5 h-5 text-gold shrink-0" />
+                  <h3 className="font-bold text-royalBlue text-base sm:text-lg">Histórico de Compras Realizadas</h3>
+                </div>
+                {vendasAgrupadas.length > 0 && (
+                  <div className="relative w-full sm:w-56">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+                      <Search className="w-4 h-4 text-slate-400" />
+                    </span>
+                    <input 
+                      type="text" 
+                      placeholder="Filtrar OS (ex: 511)..." 
+                      className="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-royalBlue bg-slate-50" 
+                      value={termoBuscaOSLocal} 
+                      onChange={(e) => setTermoBuscaOSLocal(e.target.value)} 
+                    />
+                  </div>
+                )}
               </div>
 
-              {vendasAgrupadas.length > 0 ? (
+              {vendasFiltradas.length > 0 ? (
                 <div className="space-y-4">
-                  {vendasAgrupadas.map(venda => (
+                  {vendasFiltradas.map(venda => (
                     <div key={venda.id} className="border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white">
                       <div className="p-4 bg-slate-50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 select-none">
                         
                         <div onClick={() => setVendaAbertaId(vendaAbertaId === venda.id ? null : venda.id)} className="space-y-1.5 cursor-pointer w-full sm:flex-1 min-w-0">
                           
-                          {/* === OS INCORPORADA AQUI === */}
                           <div className="flex items-center space-x-2">
                             <span className="bg-slate-200/70 text-slate-600 font-extrabold px-2 py-0.5 rounded text-[10px] tracking-wider border border-slate-300">
                               OS #{String(venda.id).padStart(5, '0')}
                             </span>
                             <p className="font-bold text-slate-700 text-xs sm:text-sm break-words">{venda.produtos}</p>
                           </div>
-                          {/* ============================== */}
 
                           <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-400 font-medium">
                             <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" /> {formatarDataBR(venda.data)}</span>
@@ -546,7 +604,6 @@ export default function Clientes({ clientes = [], setClientes }) {
                                     <div className="flex items-center space-x-2">
                                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{parc.status}</span>
                                       
-                                      {/* ATUALIZADO: Layout de recebimento inline */}
                                       {parc.status !== 'Pago' ? (
                                         <div className="flex flex-col sm:flex-row items-center bg-slate-50 p-1.5 rounded-md border border-slate-200 gap-2 sm:gap-1.5 mt-2 sm:mt-0 shadow-sm">
                                           <div className="flex flex-col w-full sm:w-auto">
@@ -599,19 +656,36 @@ export default function Clientes({ clientes = [], setClientes }) {
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-12 text-slate-400 text-xs sm:text-sm border-2 border-dashed border-slate-100 rounded-xl">Nenhum faturamento estruturado associado a este cliente.</div>
+                <div className="text-center py-12 text-slate-400 text-xs sm:text-sm border-2 border-dashed border-slate-100 rounded-xl">
+                  {termoBuscaOSLocal ? 'Nenhuma OS encontrada com este número para este cliente.' : 'Nenhum faturamento estruturado associado a este cliente.'}
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* LISTAGEM DE CARTEIRA */}
+      {/* LISTAGEM DE CARTEIRA COM BUSCA GLOBAL DE OS */}
       {abaAtiva === 'lista' && !clienteSelecionado && !carregando && (
         <div className="space-y-4">
-          <div className="relative max-w-md w-full">
-            <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><Search className="w-4 h-4 text-slate-400" /></span>
-            <input type="text" placeholder="Pesquisar cliente por nome ou CPF..." className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm" value={termoBusca} onChange={(e) => setTermoBusca(e.target.value)} />
+          <div className="flex flex-col sm:flex-row gap-3 w-full">
+            <div className="relative w-full sm:max-w-md">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><Search className="w-4 h-4 text-slate-400" /></span>
+              <input type="text" placeholder="Pesquisar cliente por nome ou CPF..." className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm" value={termoBusca} onChange={(e) => setTermoBusca(e.target.value)} />
+            </div>
+            
+            {/* NOVO CAMPO DE BUSCA DE OS GLOBAL */}
+            <form onSubmit={buscarClientePorOS} className="relative w-full sm:max-w-xs shrink-0">
+              <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><ShoppingBag className="w-4 h-4 text-slate-400" /></span>
+              <input 
+                type="text" 
+                placeholder="Abrir OS (ex: 511) + Enter" 
+                className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm" 
+                value={termoBuscaOSGlobal} 
+                onChange={(e) => setTermoBuscaOSGlobal(e.target.value)} 
+              />
+              <button type="submit" className="hidden">Buscar</button>
+            </form>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-200 w-full">
