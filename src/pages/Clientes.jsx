@@ -9,7 +9,7 @@ export default function Clientes({ clientes = [], setClientes }) {
   const [termoBusca, setTermoBusca] = useState('')
   const [idEdicao, setIdEdicao] = useState(null)
 
-  // NOVOS ESTADOS PARA BUSCA DE OS
+  // ESTADOS PARA BUSCA DE OS
   const [termoBuscaOSGlobal, setTermoBuscaOSGlobal] = useState('')
   const [termoBuscaOSLocal, setTermoBuscaOSLocal] = useState('')
 
@@ -17,12 +17,11 @@ export default function Clientes({ clientes = [], setClientes }) {
   const [vendasAgrupadas, setVendasAgrupadas] = useState([])
   const [vendaAbertaId, setVendaAbertaId] = useState(null)
 
-  // Estado para controlar a data de pagamento de cada parcela individualmente
+  // Controle de Pagamentos
   const [datasPagamento, setDatasPagamento] = useState({})
-  // Estado para controlar o valor efetivo pago na parcela
   const [valoresPagamento, setValoresPagamento] = useState({})
 
-  // Sub-modal expandido para retificação completa da venda
+  // Modal de edição de venda
   const [modalVendaEdicao, setModalVendaEdicao] = useState({ 
     aberto: false, 
     id: null,
@@ -34,12 +33,15 @@ export default function Clientes({ clientes = [], setClientes }) {
     totalVenda: '' 
   })
 
-  // Estados do formulário de cadastro/edição de clientes
+  // Estados do formulário de cadastro/edição de clientes (COM ENDEREÇO NOVO)
   const [nome, setNome] = useState('')
   const [cpf, setCpf] = useState('')
   const [dataNascimento, setDataNascimento] = useState('')
   const [telefone, setTelefone] = useState('')
   const [email, setEmail] = useState('')
+  const [rua, setRua] = useState('')
+  const [numero, setNumero] = useState('')
+  const [bairro, setBairro] = useState('')
   const [cidade, setCidade] = useState('')
   const [observacoes, setObservacoes] = useState('')
 
@@ -62,6 +64,9 @@ export default function Clientes({ clientes = [], setClientes }) {
         dataNascimento: row.data_nascimento,
         telefone: row.telefone,
         email: row.email,
+        rua: row.rua,
+        numero: row.numero,
+        bairro: row.bairro,
         cidade: row.cidade,
         observacoes: row.observacoes
       }))
@@ -77,7 +82,6 @@ export default function Clientes({ clientes = [], setClientes }) {
     carregarClientesDoBanco()
   }, [])
 
-  // Limpa as buscas quando muda de cliente
   useEffect(() => {
     if (!clienteSelecionado) {
       setTermoBuscaOSLocal('')
@@ -159,7 +163,6 @@ export default function Clientes({ clientes = [], setClientes }) {
     }
   }
 
-  // NOVA FUNÇÃO: Busca Cliente Pela OS no Banco
   const buscarClientePorOS = async (e) => {
     e.preventDefault()
     const osLimpa = termoBuscaOSGlobal.replace(/\D/g, '')
@@ -355,8 +358,8 @@ export default function Clientes({ clientes = [], setClientes }) {
         }
 
         await turso.execute({
-          sql: `UPDATE clientes SET nome = ?, cpf = ?, data_nascimento = ?, telefone = ?, email = ?, cidade = ?, observacoes = ? WHERE id = ?`,
-          args: [nome.trim(), cpfPuro, dataNascimento, telefonePuro, email.trim(), cidade.trim(), observacoes.trim(), idEdicao]
+          sql: `UPDATE clientes SET nome = ?, cpf = ?, data_nascimento = ?, telefone = ?, email = ?, rua = ?, numero = ?, bairro = ?, cidade = ?, observacoes = ? WHERE id = ?`,
+          args: [nome.trim(), cpfPuro, dataNascimento, telefonePuro, email.trim(), rua.trim(), numero.trim(), bairro.trim(), cidade.trim(), observacoes.trim(), idEdicao]
         })
       } else {
         const checarCpfNovo = await turso.execute({ sql: "SELECT id FROM clientes WHERE cpf = ?", args: [cpfPuro] })
@@ -367,8 +370,8 @@ export default function Clientes({ clientes = [], setClientes }) {
         }
 
         await turso.execute({
-          sql: `INSERT INTO clientes (nome, cpf, data_nascimento, telefone, email, cidade, observacoes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          args: [nome.trim(), cpfPuro, dataNascimento, telefonePuro, email.trim(), cidade.trim(), observacoes.trim()]
+          sql: `INSERT INTO clientes (nome, cpf, data_nascimento, telefone, email, rua, numero, bairro, cidade, observacoes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [nome.trim(), cpfPuro, dataNascimento, telefonePuro, email.trim(), rua.trim(), numero.trim(), bairro.trim(), cidade.trim(), observacoes.trim()]
         })
       }
       await carregarClientesDoBanco()
@@ -404,6 +407,9 @@ export default function Clientes({ clientes = [], setClientes }) {
     setDataNascimento(cliente.dataNascimento)
     setTelefone(cliente.telefone || '')
     setEmail(cliente.email || '')
+    setRua(cliente.rua || '')
+    setNumero(cliente.numero || '')
+    setBairro(cliente.bairro || '')
     setCidade(cliente.cidade || '')
     setObservacoes(cliente.observacoes || '')
     setAbaAtiva('cadastro')
@@ -411,7 +417,8 @@ export default function Clientes({ clientes = [], setClientes }) {
 
   const limparFormulario = () => {
     setIdEdicao(null)
-    setNome(''); setCpf(''); setDataNascimento(''); setTelefone(''); setEmail(''); setCidade(''); setObservacoes('')
+    setNome(''); setCpf(''); setDataNascimento(''); setTelefone(''); setEmail(''); 
+    setRua(''); setNumero(''); setBairro(''); setCidade(''); setObservacoes('')
   }
 
   const formatarDataBR = (dataString) => {
@@ -445,12 +452,23 @@ export default function Clientes({ clientes = [], setClientes }) {
     })
     .sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || '')))
 
-  // FILTRA AS VENDAS PELA OS (LOCAL)
   const vendasFiltradas = vendasAgrupadas.filter(venda => {
     if (!termoBuscaOSLocal) return true
     const buscaLimpa = termoBuscaOSLocal.replace(/\D/g, '')
     return String(venda.id).includes(buscaLimpa)
   })
+
+  // Monta o endereço formatado de forma bonitinha para exibir na ficha
+  const montarEndereco = (cliente) => {
+    const partes = []
+    if (cliente.rua) partes.push(cliente.rua)
+    if (cliente.numero) partes.push(cliente.numero)
+    
+    let enderecoFinal = partes.join(', ')
+    if (cliente.bairro) enderecoFinal += enderecoFinal ? ` - ${cliente.bairro}` : cliente.bairro
+    
+    return enderecoFinal || 'Não informado'
+  }
 
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-full overflow-hidden">
@@ -512,13 +530,15 @@ export default function Clientes({ clientes = [], setClientes }) {
                 <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">CPF</span><span className="text-slate-700 font-mono font-medium">{formatarCPF(clienteSelecionado.cpf)}</span></div>
                 <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">Nascimento</span><span className="text-slate-700 font-medium">{formatarDataBR(clienteSelecionado.dataNascimento)}</span></div>
                 <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">Telefone</span><span className="text-slate-700 font-medium">{formatarTelefone(clienteSelecionado.telefone) || 'Não informado'}</span></div>
+                <div>
+                  <span className="text-[10px] text-slate-400 block uppercase font-semibold">Endereço</span>
+                  <span className="text-slate-700 font-medium">{montarEndereco(clienteSelecionado)}</span>
+                </div>
                 <div><span className="text-[10px] text-slate-400 block uppercase font-semibold">Cidade</span><span className="text-slate-700 font-medium">{clienteSelecionado.cidade || 'Não informada'}</span></div>
               </div>
             </div>
 
             <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-6">
-              
-              {/* FILTRO LOCAL DE OS MODIFICADO */}
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 border-b border-slate-100 pb-3 gap-3">
                 <div className="flex items-center space-x-2">
                   <ShoppingBag className="w-5 h-5 text-gold shrink-0" />
@@ -674,7 +694,6 @@ export default function Clientes({ clientes = [], setClientes }) {
               <input type="text" placeholder="Pesquisar cliente por nome ou CPF..." className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm" value={termoBusca} onChange={(e) => setTermoBusca(e.target.value)} />
             </div>
             
-            {/* NOVO CAMPO DE BUSCA DE OS GLOBAL */}
             <form onSubmit={buscarClientePorOS} className="relative w-full sm:max-w-xs shrink-0">
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><ShoppingBag className="w-4 h-4 text-slate-400" /></span>
               <input 
@@ -725,13 +744,14 @@ export default function Clientes({ clientes = [], setClientes }) {
         </div>
       )}
 
-      {/* FORMULÁRIO DE CADASTRO */}
+      {/* FORMULÁRIO DE CADASTRO ATUALIZADO */}
       {abaAtiva === 'cadastro' && !clienteSelecionado && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden w-full">
           <div className="bg-royalBlue p-4 text-white font-bold border-b-4 border-gold text-xs sm:text-sm">
             {idEdicao ? `Atualizar Cadastro: ${nome}` : 'Preencha os Dados Cadastrais do Cliente'}
           </div>
-          <form onSubmit={handleSalvar} className="p-4 sm:p-6 space-y-4">
+          <form onSubmit={handleSalvar} className="p-4 sm:p-6 space-y-5">
+            
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Nome Completo</label>
@@ -742,6 +762,7 @@ export default function Clientes({ clientes = [], setClientes }) {
                 <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue font-mono" placeholder="000.000.000-00" value={cpf} onChange={(e) => aplicarMascaraCPF(e.target.value)} required />
               </div>
             </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Data de Nascimento</label>
@@ -756,14 +777,34 @@ export default function Clientes({ clientes = [], setClientes }) {
                 <input type="email" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none" placeholder="cliente@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
               </div>
             </div>
-            <div>
-              <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Cidade</label>
-              <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none" value={cidade} onChange={(e) => setCidade(e.target.value)} />
+
+            <div className="border-t border-slate-100 pt-5">
+              <h4 className="text-xs font-bold text-royalBlue uppercase mb-4 tracking-wider">Endereço Residencial</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                <div className="sm:col-span-8">
+                  <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Logradouro (Rua, Av, Travessa)</label>
+                  <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue" placeholder="Rua das Flores..." value={rua} onChange={(e) => setRua(e.target.value)} />
+                </div>
+                <div className="sm:col-span-4">
+                  <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Número</label>
+                  <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue" placeholder="123 ou S/N" value={numero} onChange={(e) => setNumero(e.target.value)} />
+                </div>
+                <div className="sm:col-span-6">
+                  <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Bairro</label>
+                  <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue" placeholder="Centro" value={bairro} onChange={(e) => setBairro(e.target.value)} />
+                </div>
+                <div className="sm:col-span-6">
+                  <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Cidade</label>
+                  <input type="text" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue" placeholder="Horizonte" value={cidade} onChange={(e) => setCidade(e.target.value)} />
+                </div>
+              </div>
             </div>
-            <div>
+
+            <div className="border-t border-slate-100 pt-5">
               <label className="block text-[10px] sm:text-xs font-semibold text-slate-600 uppercase mb-1">Observações Opcionais</label>
               <textarea rows="3" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none resize-none" value={observacoes} onChange={(e) => setObservacoes(e.target.value)} />
             </div>
+
             <div className="flex justify-end space-x-3 pt-2">
               <button type="button" onClick={() => { limparFormulario(); setAbaAtiva('lista'); }} className="bg-slate-100 px-4 sm:px-5 py-2 rounded-lg text-xs sm:text-sm font-medium text-slate-600 hover:bg-slate-200">Cancelar</button>
               <button type="submit" className="bg-royalBlue text-white font-medium px-5 sm:px-6 py-2 rounded-lg border-b-2 border-gold shadow-md text-xs sm:text-sm">{idEdicao ? 'Salvar Alterações' : 'Concluir Cadastro'}</button>
