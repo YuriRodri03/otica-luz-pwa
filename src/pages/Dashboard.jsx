@@ -199,14 +199,20 @@ export default function Dashboard() {
       const totalDespesas = listaDespesas.reduce((acc, curr) => acc + (curr.valor || 0), 0)
       setTotalDespesasPagasMes(totalDespesas)
 
-      // Gráfico de Pizza por Método de Venda do Mês
+      // Gráfico de Pizza por Método de Venda do Mês (AGORA AGRUPANDO CARTÕES)
       const resMetodos = await turso.execute(`
-        SELECT metodo_venda, SUM(total_liquido) as total FROM vendas 
+        SELECT 
+          CASE 
+            WHEN metodo_venda LIKE 'Cartão%' THEN 'Cartão de Crédito'
+            ELSE metodo_venda 
+          END as metodo_agrupado, 
+          SUM(total_liquido) as total 
+        FROM vendas 
         WHERE strftime('%m', criado_em) = '${mesFormatado}' AND strftime('%Y', criado_em) = '${anoFiltro}'
-        GROUP BY metodo_venda
+        GROUP BY metodo_agrupado
       `)
       const CORES = ['#002060', '#D4AF37', '#8D6E63', '#AA7C11']
-      setDadosPizza(resMetodos.rows.map((r, i) => ({ name: r.metodo_venda, value: r.total, color: CORES[i % CORES.length] })))
+      setDadosPizza(resMetodos.rows.map((r, i) => ({ name: r.metodo_agrupado, value: r.total, color: CORES[i % CORES.length] })))
 
       // Montando o Gráfico Diário Consolidando Vendas à Vista + Entradas + Parcelas Recebidas
       const diasNoMes = new Date(anoFiltro, mesFiltro, 0).getDate()
@@ -252,8 +258,11 @@ export default function Dashboard() {
     carregarDashboard()
   }, [mesFiltro, anoFiltro, anoFiltroAnual])
 
+  // FILTRO INTELIGENTE PARA A TABELA (Lida com o clique no Cartão de Crédito)
   const vendasFiltradasTabela = vendasMensais.filter(v => {
-    return metodoFiltroTabela === 'todos' || v.metodo_venda === metodoFiltroTabela
+    if (metodoFiltroTabela === 'todos') return true
+    if (metodoFiltroTabela === 'Cartão de Crédito') return v.metodo_venda?.startsWith('Cartão')
+    return v.metodo_venda === metodoFiltroTabela
   })
 
   // Soma de todos os pedidos no mês, independente de estarem pagos (Competência)
