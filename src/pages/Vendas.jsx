@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Plus, Trash2, Percent, Calendar, AlertTriangle, XCircle, CheckCircle, Save } from 'lucide-react'
+import { Plus, Trash2, Percent, Calendar, AlertTriangle, XCircle, CheckCircle, Save, Edit3 } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, clientes }) {
@@ -8,8 +8,13 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
   const [focoBusca, setFocoBusca] = useState(false)
   const [metodoVenda, setMetodoVenda] = useState('Dinheiro')
   
+  // Edição de Cliente
+  const [modalEdicaoCliente, setModalEdicaoCliente] = useState(false)
+  const [dadosEdicaoCliente, setDadosEdicaoCliente] = useState({})
+
   // Campo de Data com o dia atual de forma retroativa (Formato YYYY-MM-DD)
   const [dataVenda, setDataVenda] = useState(() => new Date().toISOString().split('T')[0])
+  const [observacoes, setObservacoes] = useState('')
 
   // Carrinho de Compras
   const [carrinho, setCarrinho] = useState([])
@@ -19,9 +24,10 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
   // Descontos e Parcelamento
   const [desconto, setDesconto] = useState('') 
   const [valorEntrada, setValorEntrada] = useState('')
+  const [metodoEntrada, setMetodoEntrada] = useState('Dinheiro') // NOVO: Forma de pagamento da entrada
   const [numParcelas, setNumParcelas] = useState(1)
   
-  // Novas variáveis para Cartão e Crediário
+  // Novas variáveis para Cartão
   const [parcelasCartao, setParcelasCartao] = useState(1)
   const [dataPrimeiraParcela, setDataPrimeiraParcela] = useState('')
 
@@ -74,6 +80,60 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
   const valorFinanciado = Math.max(0, totalComDesconto - entrada)
   const valorPorParcela = numParcelas > 0 ? valorFinanciado / numParcelas : 0
 
+  // ==========================================
+  // SALVAR EDIÇÃO RÁPIDA DE CLIENTE
+  // ==========================================
+  const handleSalvarEdicaoCliente = async (e) => {
+    e.preventDefault()
+    try {
+      await turso.execute({
+        sql: `UPDATE clientes SET 
+                nome = ?, cpf = ?, telefone = ?, data_nascimento = ?, 
+                cep = ?, endereco = ?, numero = ?, complemento = ?, 
+                bairro = ?, cidade = ?, estado = ?
+              WHERE id = ?`,
+        args: [
+          dadosEdicaoCliente.nome || '',
+          dadosEdicaoCliente.cpf || '',
+          dadosEdicaoCliente.telefone || '',
+          dadosEdicaoCliente.data_nascimento || '',
+          dadosEdicaoCliente.cep || '',
+          dadosEdicaoCliente.endereco || '',
+          dadosEdicaoCliente.numero || '',
+          dadosEdicaoCliente.complemento || '',
+          dadosEdicaoCliente.bairro || '',
+          dadosEdicaoCliente.cidade || '',
+          dadosEdicaoCliente.estado || '',
+          dadosEdicaoCliente.id
+        ]
+      })
+      
+      setClienteSelecionado(dadosEdicaoCliente)
+      setModalEdicaoCliente(false)
+      await carregarLancamentosDoBanco() // Atualiza a lista global no fundo
+      
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'sucesso',
+        titulo: 'Cadastro Atualizado',
+        mensagem: 'Os dados do cliente foram alterados com sucesso e já constam nesta venda.',
+        onConfirmar: null
+      })
+    } catch (error) {
+      console.error("Erro ao editar cliente:", error)
+      setAlertaConfig({
+        aberto: true,
+        tipo: 'erro',
+        titulo: 'Erro na Edição',
+        mensagem: 'Falha ao atualizar os dados do cliente no banco. Verifique as colunas.',
+        onConfirmar: null
+      })
+    }
+  }
+
+  // ==========================================
+  // FINALIZAR VENDA
+  // ==========================================
   const handleSalvarVenda = async (e) => {
     e.preventDefault()
     if (!clienteSelecionado || carrinho.length === 0) return
@@ -98,16 +158,19 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
         const produtosResSummary = carrinho.map(item => item.produto).join(', ')
         const dataOcorrencia = new Date(`${dataVenda}T12:00:00`).toISOString()
         
-        // Concatena a quantidade de parcelas se for cartão de crédito
-        const metodoFinal = (metodoVenda === 'Cartão de Crédito' && parcelasCartao > 1) 
-          ? `Cartão de Crédito (${parcelasCartao}x)` 
-          : metodoVenda;
+        // Define o método final (incluindo as parcelas do cartão ou forma da entrada do crediário)
+        let metodoFinal = metodoVenda;
+        if (metodoVenda === 'Cartão de Crédito' && parcelasCartao > 1) {
+          metodoFinal = `Cartão de Crédito (${parcelasCartao}x)`;
+        } else if (metodoVenda === 'Crediário' && entrada > 0) {
+          metodoFinal = `Crediário (Entrada: ${metodoEntrada})`;
+        }
 
         try {
           const resVenda = await turso.execute({
             sql: `INSERT INTO vendas 
-                  (cliente_id, produtos, subtotal, desconto, total_liquido, valor_entrada, metodo_venda, criado_em) 
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                  (cliente_id, produtos, subtotal, desconto, total_liquido, valor_entrada, metodo_venda, criado_em, observacoes) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             args: [
               clienteSelecionado.id, 
               produtosResSummary, 
@@ -116,17 +179,17 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               totalComDesconto, 
               entrada, 
               metodoFinal, 
-              dataOcorrencia
+              dataOcorrencia,
+              observacoes
             ]
           })
 
-          const vendaId = resVenda.lastInsertRowid
+          const vendaId = resVenda.lastInsertRowid // CAPTURA DA OS
 
           if (metodoVenda === 'Crediário' && valorFinanciado > 0) {
             const [anoVenc, mesVenc, diaVenc] = dataPrimeiraParcela.split('-').map(Number);
             
             for (let i = 1; i <= numParcelas; i++) {
-              // Ajusta o mês iterativamente. O (mesVenc - 1) é porque os meses no Date começam do zero.
               let dataVenc = new Date(anoVenc, (mesVenc - 1) + (i - 1), diaVenc);
               
               await turso.execute({
@@ -149,9 +212,11 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
           setCarrinho([])
           setDesconto('')
           setValorEntrada('')
+          setMetodoEntrada('Dinheiro') // Reseta a forma da entrada
           setNumParcelas(1)
           setParcelasCartao(1)
           setDataPrimeiraParcela('')
+          setObservacoes('')
           setDataVenda(new Date().toISOString().split('T')[0]) 
           setModalAberto(false)
 
@@ -159,7 +224,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             aberto: true,
             tipo: 'sucesso',
             titulo: 'Checkout Concluído',
-            mensagem: 'A venda foi armazenada com sucesso e os caixas gerenciais atualizados.',
+            mensagem: `A venda foi armazenada com sucesso sob a OS #${vendaId}.`,
             onConfirmar: null
           })
         } catch (error) {
@@ -168,7 +233,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             aberto: true,
             tipo: 'erro',
             titulo: 'Erro Relacional',
-            mensagem: 'Houve um problema de transação operacional ao persistir no SQLite.',
+            mensagem: 'Houve um problema de transação. Verifique se a coluna "observacoes" foi criada na tabela vendas.',
             onConfirmar: null
           })
         }
@@ -192,13 +257,24 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                   <input 
                     type="text" 
                     className="w-full bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs sm:text-sm text-emerald-800 font-medium cursor-not-allowed h-10 flex items-center"
-                    value={`${clienteSelecionado.nome} (CPF: ${clienteSelecionado.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")})`}
+                    value={`${clienteSelecionado.nome} (CPF: ${clienteSelecionado.cpf?.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4") || 'N/A'})`}
                     disabled
                   />
                   <button 
                     type="button" 
+                    onClick={() => {
+                      setDadosEdicaoCliente(clienteSelecionado)
+                      setModalEdicaoCliente(true)
+                    }} 
+                    className="bg-royalBlue text-white border border-royalBlue-dark text-xs font-bold px-3 rounded-lg hover:bg-royalBlue-light transition-colors shrink-0 h-10 flex items-center space-x-1"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Editar</span>
+                  </button>
+                  <button 
+                    type="button" 
                     onClick={() => { setClienteSelecionado(null); setBuscaCliente(''); }} 
-                    className="bg-rose-50 text-rose-600 border border-rose-200 text-xs font-bold px-4 rounded-lg hover:bg-rose-100 transition-colors shrink-0 h-10"
+                    className="bg-rose-50 text-rose-600 border border-rose-200 text-xs font-bold px-3 sm:px-4 rounded-lg hover:bg-rose-100 transition-colors shrink-0 h-10"
                   >
                     Trocar
                   </button>
@@ -220,7 +296,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               </div>
             )}
 
-            {/* Menu Dropdown Flutuante Otimizado e com Quebra de Linha */}
+            {/* Menu Dropdown Flutuante */}
             {focoBusca && clientesSugeridos.length > 0 && (
               <div className="absolute left-0 right-0 bg-white border border-slate-200 mt-1 rounded-lg shadow-xl max-h-60 overflow-y-auto z-50 divide-y divide-slate-100">
                 {clientesSugeridos.map(c => (
@@ -233,7 +309,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                     className="p-3 text-xs hover:bg-slate-50 cursor-pointer flex flex-col text-slate-700 gap-1"
                   >
                     <span className="font-semibold whitespace-normal break-words leading-tight">{c.nome}</span>
-                    <span className="text-slate-400 text-[10px] sm:text-xs shrink-0 font-mono">CPF: {c.cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
+                    <span className="text-slate-400 text-[10px] sm:text-xs shrink-0 font-mono">CPF: {c.cpf?.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4")}</span>
                   </div>
                 ))}
               </div>
@@ -267,7 +343,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             </select>
           </div>
 
-          {/* QUANTIDADE DE PARCELAS NO CARTÃO (Aparece apenas se Cartão selecionado) */}
+          {/* QUANTIDADE DE PARCELAS NO CARTÃO */}
           {metodoVenda === 'Cartão de Crédito' && (
             <div className="col-span-1 sm:col-span-2 p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center justify-between">
               <span className="text-xs font-medium text-blue-800">Em quantas vezes no cartão?</span>
@@ -344,7 +420,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               <Calendar className="w-4 h-4 text-gold-dark shrink-0" />
               <span>Parametrizar Financiamento de Carnê</span>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Valor de Entrada (R$)</label>
                 <input 
@@ -356,6 +432,23 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                   onChange={(e) => setValorEntrada(e.target.value)}
                 />
               </div>
+              
+              {/* NOVO CAMPO: Forma de Pagamento da Entrada */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Paga em</label>
+                <select 
+                  className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-royalBlue disabled:opacity-50 disabled:cursor-not-allowed"
+                  value={metodoEntrada}
+                  onChange={(e) => setMetodoEntrada(e.target.value)}
+                  disabled={!valorEntrada || parseFloat(valorEntrada) <= 0}
+                >
+                  <option value="Dinheiro">Dinheiro</option>
+                  <option value="Pix">Pix</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                  <option value="Cartão de Crédito">Cartão de Crédito</option>
+                </select>
+              </div>
+
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Nº de Parcelas</label>
                 <input 
@@ -378,11 +471,23 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             </div>
             {valorFinanciado > 0 && dataPrimeiraParcela && (
               <p className="text-[10px] sm:text-[11px] font-medium text-wood-dark/90 italic bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">
-                Do total líquido, <span className="font-bold text-emerald-600">R$ {entrada.toFixed(2)}</span> entram à vista no caixa. O saldo restante de <span className="font-bold text-royalBlue">R$ {valorFinanciado.toFixed(2)}</span> gerará <span className="font-bold">{numParcelas}x de R$ {valorPorParcela.toFixed(2)}</span> a partir de {dataPrimeiraParcela.split('-').reverse().join('/')}.
+                Do total líquido, <span className="font-bold text-emerald-600">R$ {entrada.toFixed(2)}</span> entram à vista no caixa (via {entrada > 0 ? metodoEntrada : 'nenhum'}). O saldo restante de <span className="font-bold text-royalBlue">R$ {valorFinanciado.toFixed(2)}</span> gerará <span className="font-bold">{numParcelas}x de R$ {valorPorParcela.toFixed(2)}</span> a partir de {dataPrimeiraParcela.split('-').reverse().join('/')}.
               </p>
             )}
           </div>
         )}
+
+        {/* CAMPO DE OBSERVAÇÕES */}
+        <div>
+          <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Observações da Receita / OS</label>
+          <textarea 
+            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-slate-50 shadow-sm resize-none"
+            rows="2"
+            placeholder="Ex: Lente multifocal, AR verde, Armação entregue pelo cliente..."
+            value={observacoes}
+            onChange={(e) => setObservacoes(e.target.value)}
+          ></textarea>
+        </div>
 
         {/* BLOCO TOTALIZADOR FINAL */}
         <div className="bg-slate-900 text-white p-4 rounded-xl space-y-2.5 shadow-md">
@@ -443,9 +548,86 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
 
       </form>
 
+      {/* 📝 MODAL DE EDIÇÃO DE CLIENTE (Dentro de Vendas) */}
+      {modalEdicaoCliente && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-royalBlue uppercase text-sm">Edição Rápida de Cliente</h3>
+              <button onClick={() => setModalEdicaoCliente(false)} className="text-slate-400 hover:text-rose-500 transition-colors">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <form onSubmit={handleSalvarEdicaoCliente} className="p-4 sm:p-6 overflow-y-auto space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome Completo</label>
+                  <input type="text" value={dadosEdicaoCliente.nome || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, nome: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" required />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">CPF</label>
+                  <input type="text" value={dadosEdicaoCliente.cpf || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, cpf: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">WhatsApp / Telefone</label>
+                  <input type="text" value={dadosEdicaoCliente.telefone || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, telefone: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Data Nascimento</label>
+                  <input type="date" value={dadosEdicaoCliente.data_nascimento || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, data_nascimento: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <span className="text-xs font-bold text-royalBlue uppercase tracking-wider block mb-3 border-b border-slate-100 pb-1">Endereço</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="sm:col-span-1">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">CEP</label>
+                    <input type="text" value={dadosEdicaoCliente.cep || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, cep: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Logradouro / Rua</label>
+                    <input type="text" value={dadosEdicaoCliente.endereco || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, endereco: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Número</label>
+                    <input type="text" value={dadosEdicaoCliente.numero || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, numero: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Complemento</label>
+                    <input type="text" value={dadosEdicaoCliente.complemento || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, complemento: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Bairro</label>
+                    <input type="text" value={dadosEdicaoCliente.bairro || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, bairro: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Cidade</label>
+                    <input type="text" value={dadosEdicaoCliente.cidade || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, cidade: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Estado (UF)</label>
+                    <input type="text" value={dadosEdicaoCliente.estado || ''} onChange={e => setDadosEdicaoCliente({...dadosEdicaoCliente, estado: e.target.value})} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-royalBlue" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-4 border-t border-slate-100">
+                <button type="button" onClick={() => setModalEdicaoCliente(false)} className="px-4 py-2 rounded-lg font-medium text-sm text-slate-600 hover:bg-slate-100 transition-colors">Cancelar</button>
+                <button type="submit" className="bg-royalBlue hover:bg-royalBlue-light text-white px-5 py-2 rounded-lg text-sm font-bold border-b-2 border-gold flex items-center space-x-2 transition-all">
+                  <Save className="w-4 h-4" />
+                  <span>Salvar Cliente</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* 🔔 MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO DA ÓTICA LUZ */}
       {alertaConfig.aberto && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
             <div className="p-5 space-y-4">
               <div className="flex items-start space-x-3">
