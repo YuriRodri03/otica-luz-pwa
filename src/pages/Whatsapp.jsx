@@ -9,6 +9,8 @@ export default function WhatsappControl() {
   // Controle dos templates de mensagens editáveis
   const [msgAniversario, setMsgAniversario] = useState('');
   const [msgPosVenda, setMsgPosVenda] = useState('');
+  const [msgUmAno, setMsgUmAno] = useState(''); // NOVO: Estado para a mensagem de 1 ano
+  
   const [salvandoConfig, setSalvandoConfig] = useState(false);
   const [carregandoConfig, setCarregandoConfig] = useState(true);
 
@@ -59,11 +61,13 @@ export default function WhatsappControl() {
       const dados = await res.json();
       setMsgAniversario(dados.msg_aniversario || '');
       setMsgPosVenda(dados.msg_pos_venda || '');
+      setMsgUmAno(dados.msg_um_ano || ''); // NOVO: Carrega do banco
     } catch (error) {
       console.error("Erro ao carregar templates de mensagens:", error);
       // Fallback amigável caso o banco falhe temporariamente para não deixar vazio
       setMsgAniversario(prev => prev || 'Olá, {nome}! 🎉 Feliz Aniversário!');
       setMsgPosVenda(prev => prev || 'Olá, {nome}! Obrigado por comprar o produto {produtos}.');
+      setMsgUmAno(prev => prev || 'Olá, {nome}! Hoje faz exatamente um ano que você adquiriu {produtos} conosco. Que tal agendar uma nova avaliação da sua visão?'); // NOVO: Fallback
     } finally {
       setCarregandoConfig(false);
     }
@@ -96,7 +100,8 @@ export default function WhatsappControl() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           msg_aniversario: msgAniversario,
-          msg_pos_venda: msgPosVenda
+          msg_pos_venda: msgPosVenda,
+          msg_um_ano: msgUmAno // NOVO: Envia para salvar
         })
       });
       const resultado = await res.json();
@@ -111,7 +116,7 @@ export default function WhatsappControl() {
       }
     } catch (error) {
       setAlertaConfig({
-        open: true,
+        aberto: true,
         tipo: 'erro',
         titulo: 'Erro ao Salvar',
         mensagem: 'Não foi possível atualizar as mensagens no servidor. Verifique a conexão.',
@@ -279,7 +284,7 @@ export default function WhatsappControl() {
             />
           </div>
 
-          {/* TEMPLATE PÓS-VENDA */}
+          {/* TEMPLATE PÓS-VENDA 30 DIAS */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
               <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">Mensagem de Pós-Venda (30 dias)</label>
@@ -294,6 +299,25 @@ export default function WhatsappControl() {
               onChange={(e) => setMsgPosVenda(e.target.value)}
               className="w-full border border-slate-300 rounded-lg p-3 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white font-normal text-slate-700 leading-relaxed resize-none"
               placeholder="Carregando ou escreva a mensagem de acompanhamento pós-venda..."
+              required
+            />
+          </div>
+
+          {/* NOVO: TEMPLATE PÓS-VENDA 1 ANO */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center">
+              <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">Mensagem de Reconquista (1 Ano)</label>
+              <div className="flex space-x-1">
+                <span className="text-[10px] bg-royalBlue/10 text-royalBlue px-1.5 py-0.5 rounded font-mono font-bold">{"{nome}"}</span>
+                <span className="text-[10px] bg-gold/20 text-gold-dark px-1.5 py-0.5 rounded font-mono font-bold">{"{produtos}"}</span>
+              </div>
+            </div>
+            <textarea
+              rows="4"
+              value={msgUmAno}
+              onChange={(e) => setMsgUmAno(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg p-3 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white font-normal text-slate-700 leading-relaxed resize-none"
+              placeholder="Carregando ou escreva a mensagem de reconquista..."
               required
             />
           </div>

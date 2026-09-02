@@ -42,13 +42,19 @@ const turso = createClient({
 let whatsappClient = null; 
 let statusConexao = 'Iniciando...'; 
 let qrCodeBase64 = null;
-let clientesEnviadosHoje = [];
+
+// Controles de Envios Diários
 let diaAtualGerenciamento = null;
-let posVendasEnviadosHoje = [];
+let clientesEnviadosHoje = [];
+
 let diaAtualPosVendaGerenciamento = null;
+let posVendasEnviadosHoje = [];
+
+let diaAtualUmAnoGerenciamento = null; // NOVO: Controle de 1 ano
+let vendasUmAnoEnviadosHoje = [];
 
 // ==========================================
-// 2. ROTAS DE CONTROLE PARA O FRONT-END (REACT)
+// 2. ROTAS DE CONTROLE PARA O FRONT-END
 // ==========================================
 
 app.get('/api/whatsapp/status', (req, res) => {
@@ -60,9 +66,10 @@ app.get('/api/whatsapp/status', (req, res) => {
 
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
-    const configs = { msg_aniversario: '', msg_pos_venda: '' };
+    // NOVO: Adicionado msg_um_ano
+    const configs = { msg_aniversario: '', msg_pos_venda: '', msg_um_ano: '' };
     const r = await turso.execute({
-      sql: "SELECT chave, valor FROM configuracoes WHERE chave IN ('msg_aniversario', 'msg_pos_venda')",
+      sql: "SELECT chave, valor FROM configuracoes WHERE chave IN ('msg_aniversario', 'msg_pos_venda', 'msg_um_ano')",
       args: []
     });
     
@@ -82,7 +89,7 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
 
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
-    const { msg_aniversario, msg_pos_venda } = req.body;
+    const { msg_aniversario, msg_pos_venda, msg_um_ano } = req.body; // NOVO: msg_um_ano
     
     if (msg_aniversario !== undefined) {
       await turso.execute({
@@ -95,6 +102,14 @@ app.post('/api/whatsapp/config-mensagens', async (req, res) => {
       await turso.execute({
         sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_pos_venda', ?)",
         args: [String(msg_pos_venda).trim()]
+      });
+    }
+
+    // NOVO: Salva a config de 1 ano
+    if (msg_um_ano !== undefined) {
+      await turso.execute({
+        sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_um_ano', ?)",
+        args: [String(msg_um_ano).trim()]
       });
     }
 
@@ -152,7 +167,6 @@ async function inicializarWhatsApp() {
     const creds = dadosSessao.creds || initAuthCreds();
     const chavesSalvas = dadosSessao.keys || {};
     
-    // 🔥 CORREÇÃO: Debounce ajustado e adição de Lock (isSaving) para evitar corromper o JSON
     let saveTimeout = null;
     let isSaving = false;
     const guardarSessaoNoBanco = async () => {
@@ -190,7 +204,6 @@ async function inicializarWhatsApp() {
         set: (data) => {
           let mudouAlgo = false;
           for (const type in data) {
-            // 🔥 CORREÇÃO: Removido o filtro de IF. O Baileys precisa salvar TODAS as chaves (inclusive as do tipo 'record')
             if (!chavesSalvas[type]) chavesSalvas[type] = {};
             for (const id in data[type]) {
               if (data[type][id]) {
@@ -220,8 +233,8 @@ async function inicializarWhatsApp() {
       defaultQueryTimeoutMs: 90000, 
       keepAliveIntervalMs: 30000, 
       
-      syncFullHistory: false,             // Impede o download completo do celular 
-      markOnlineOnConnect: true,          // 🔥 Ajuda a destravar o "Sincronizando" no celular mais rápido
+      syncFullHistory: false,             
+      markOnlineOnConnect: true,          
       linkPreviewKeystore: null, 
 
       options: {
@@ -233,10 +246,6 @@ async function inicializarWhatsApp() {
                jid.includes('newsletter') || 
                jid.endsWith('@g.us');
       },
-
-      // 🔥 CORREÇÃO: A função shouldSyncHistoryMessage foi removida.
-      // O Baileys vai receber os pacotes do celular, responder que recebeu (ACK) e descartar por causa do syncFullHistory: false.
-      // Isso é o que evita o celular ficar em loop aguardando retorno.
       
       patchMessageBeforeSending: (msg) => {
         const hasSender = !!(msg.message && (msg.message.buttonsMessage || msg.message.templateMessage || msg.message.listMessage));
@@ -299,7 +308,6 @@ async function inicializarWhatsApp() {
               sql: "INSERT OR IGNORE INTO clientes (telefone, origem, etapa_chatbot) VALUES (?, 'trafego_pago', 'finalizado')",
               args: [numeroPuro]
             });
-            console.log(`💾 Novo lead ${numeroPuro} salvo no banco como 'trafego_pago'.`);
           } catch (dbErr) {
             console.error('⚠️ Erro ao registrar contato de tráfego pago:', dbErr.message);
           }
@@ -324,11 +332,7 @@ async function inicializarWhatsApp() {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-        
-        const sessaoInvalida = statusCode === DisconnectReason.loggedOut || 
-                               statusCode === 401 || 
-                               statusCode === 403;
-                               
+        const sessaoInvalida = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403;
         const streamErrored = statusCode === 515; 
         
         console.log(`Conexão fechada. Código: ${statusCode}. Sessão inválida? ${sessaoInvalida} | Stream Errored? ${streamErrored}`);
@@ -361,8 +365,7 @@ async function inicializarWhatsApp() {
         console.log('✅ WhatsApp conectado com sucesso via Baileys e Turso (Sessão Perpétua)!');
 
         setTimeout(() => {
-          verificarAniversariantesDoDia();
-          verificarPosVendaTrintaDias();
+          executarRotinasDiarias();
         }, 15000);
       }
     });
@@ -405,6 +408,13 @@ async function validarNumeroWhatsApp(numeroPuro) {
 // ==========================================
 // 5. ROTINA AUTOMÁTICA DE DISPAROS
 // ==========================================
+async function executarRotinasDiarias() {
+  console.log("🕒 Iniciando checagem de rotinas diárias (Aniversários, Pós-Venda, 1 Ano de Venda)...")
+  await verificarAniversariantesDoDia();
+  await verificarPosVendaTrintaDias();
+  await verificarVendaUmAno();
+}
+
 async function verificarAniversariantesDoDia() {
   if (!whatsappClient || statusConexao !== 'Conectado') return;
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
@@ -444,7 +454,7 @@ async function verificarAniversariantesDoDia() {
         await enviarMensagemTexto(jidValido, message); 
         clientesEnviadosHoje.push(identificadorUnico);
       } catch (err) {
-        console.error(`Falha ao entregar mensagem para ${nome}:`, err.message);
+        console.error(`Falha ao entregar aniversário para ${nome}:`, err.message);
       }
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
@@ -453,9 +463,6 @@ async function verificarAniversariantesDoDia() {
   }
 }
 
-// ==========================================
-// 6. ROTINA AUTOMÁTICA DE PÓS-VENDA
-// ==========================================
 async function verificarPosVendaTrintaDias() {
   if (!whatsappClient || statusConexao !== 'Conectado') return;
   const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
@@ -506,7 +513,61 @@ async function verificarPosVendaTrintaDias() {
   }
 }
 
+// ==========================================
+// 7. NOVA ROTINA: 1 ANO DE VENDA (RECOMPRA)
+// ==========================================
+async function verificarVendaUmAno() {
+  if (!whatsappClient || statusConexao !== 'Conectado') return;
+  const hojeDataCompleta = new Date().toLocaleDateString('sv-SE'); 
+  if (diaAtualUmAnoGerenciamento !== hojeDataCompleta) {
+    diaAtualUmAnoGerenciamento = hojeDataCompleta;
+    vendasUmAnoEnviadosHoje = []; 
+  }
+
+  try {
+    const resConfig = await turso.execute("SELECT valor FROM configuracoes WHERE chave = 'msg_um_ano'");
+    const templateUmAno = resConfig.rows[0]?.valor || "Olá, {nome}! Hoje faz exatamente um ano que você adquiriu {produtos} conosco. Que tal agendar uma nova avaliação da sua visão?";
+
+    const resultado = await turso.transaction("read").then(async (tx) => {
+      const res = await tx.execute(`
+        SELECT v.id AS venda_id, c.nome, c.telefone, v.produtos 
+        FROM vendas v
+        JOIN clientes c ON v.cliente_id = c.id
+        WHERE date(v.criado_em) = date('now', '-1 year', 'localtime')
+      `);
+      tx.close();
+      return res;
+    });
+    
+    if (resultado.rows.length === 0) return;
+    
+    for (const venda of resultado.rows) {
+      const { venda_id, nome, telefone, produtos } = venda;
+      const identificadorVenda = venda_id || `${telefone}_${produtos}_1ano`;
+      
+      if (vendasUmAnoEnviadosHoje.includes(identificadorVenda)) continue;
+      if (!telefone) continue;
+      
+      let numeroPuro = telefone.replace(/\D/g, '');
+      if (!numeroPuro.startsWith('55')) numeroPuro = `55${numeroPuro}`;
+      
+      const message = templateUmAno.replace(/{nome}/g, nome).replace(/{produtos}/g, produtos);
+      const jidValido = await validarNumeroWhatsApp(numeroPuro);
+      
+      try {
+        await enviarMensagemTexto(jidValido, message); 
+        vendasUmAnoEnviadosHoje.push(identificadorVenda);
+      } catch (err) {
+        console.error(`Falha no envio de 1 ano para ${nome}:`, err.message);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+  } catch (error) {
+    console.error('❌ Erro na rotina de 1 ano de pós-venda:', error);
+  }
+}
+
+// O setInterval agora chama todas as rotinas em lote
 setInterval(() => {
-  verificarAniversariantesDoDia();
-  verificarPosVendaTrintaDias();
+  executarRotinasDiarias();
 }, 1000 * 60 * 60);
