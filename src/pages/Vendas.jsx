@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Plus, Trash2, Percent, Calendar, AlertTriangle, XCircle, CheckCircle, Save, Edit3 } from 'lucide-react'
+import { Plus, Trash2, Percent, Calendar, AlertTriangle, XCircle, CheckCircle, Save, Edit3, ImagePlus, Loader2 } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, clientes }) {
@@ -16,6 +16,10 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
   const [dataVenda, setDataVenda] = useState(() => new Date().toISOString().split('T')[0])
   const [observacoes, setObservacoes] = useState('')
 
+  // Gestão de Fotos (Receitas, Armações)
+  const [fotos, setFotos] = useState([])
+  const [salvandoVenda, setSalvandoVenda] = useState(false)
+
   // Carrinho de Compras
   const [carrinho, setCarrinho] = useState([])
   const [produtoInput, setProdutoInput] = useState('') 
@@ -24,7 +28,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
   // Descontos e Parcelamento
   const [desconto, setDesconto] = useState('') 
   const [valorEntrada, setValorEntrada] = useState('')
-  const [metodoEntrada, setMetodoEntrada] = useState('Dinheiro') // NOVO: Forma de pagamento da entrada
+  const [metodoEntrada, setMetodoEntrada] = useState('Dinheiro')
   const [numParcelas, setNumParcelas] = useState(1)
   
   // Novas variáveis para Cartão
@@ -72,6 +76,25 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
     setCarrinho(carrinho.filter(item => item.id !== id))
   }
 
+  // Manipulação de Fotos
+  const handleAdicionarFoto = (e) => {
+    const files = Array.from(e.target.files)
+    const novasFotos = files.map(file => ({
+      id: Date.now() + Math.random(),
+      file,
+      preview: URL.createObjectURL(file)
+    }))
+    setFotos([...fotos, ...novasFotos])
+  }
+
+  const removerFoto = (id) => {
+    setFotos(prev => {
+      const foto = prev.find(f => f.id === id)
+      if (foto) URL.revokeObjectURL(foto.preview) // Limpa memória do navegador
+      return prev.filter(f => f.id !== id)
+    })
+  }
+
   const subtotal = carrinho.reduce((sum, item) => sum + item.valor, 0)
   const valorDesconto = desconto ? parseFloat(desconto) : 0
   const totalComDesconto = Math.max(0, subtotal - valorDesconto)
@@ -93,40 +116,25 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                 bairro = ?, cidade = ?, estado = ?
               WHERE id = ?`,
         args: [
-          dadosEdicaoCliente.nome || '',
-          dadosEdicaoCliente.cpf || '',
-          dadosEdicaoCliente.telefone || '',
-          dadosEdicaoCliente.data_nascimento || '',
-          dadosEdicaoCliente.cep || '',
-          dadosEdicaoCliente.endereco || '',
-          dadosEdicaoCliente.numero || '',
-          dadosEdicaoCliente.complemento || '',
-          dadosEdicaoCliente.bairro || '',
-          dadosEdicaoCliente.cidade || '',
-          dadosEdicaoCliente.estado || '',
-          dadosEdicaoCliente.id
+          dadosEdicaoCliente.nome || '', dadosEdicaoCliente.cpf || '', dadosEdicaoCliente.telefone || '',
+          dadosEdicaoCliente.data_nascimento || '', dadosEdicaoCliente.cep || '', dadosEdicaoCliente.endereco || '',
+          dadosEdicaoCliente.numero || '', dadosEdicaoCliente.complemento || '', dadosEdicaoCliente.bairro || '',
+          dadosEdicaoCliente.cidade || '', dadosEdicaoCliente.estado || '', dadosEdicaoCliente.id
         ]
       })
       
       setClienteSelecionado(dadosEdicaoCliente)
       setModalEdicaoCliente(false)
-      await carregarLancamentosDoBanco() // Atualiza a lista global no fundo
+      await carregarLancamentosDoBanco() 
       
       setAlertaConfig({
-        aberto: true,
-        tipo: 'sucesso',
-        titulo: 'Cadastro Atualizado',
-        mensagem: 'Os dados do cliente foram alterados com sucesso e já constam nesta venda.',
-        onConfirmar: null
+        aberto: true, tipo: 'sucesso', titulo: 'Cadastro Atualizado',
+        mensagem: 'Os dados do cliente foram alterados com sucesso e já constam nesta venda.', onConfirmar: null
       })
     } catch (error) {
-      console.error("Erro ao editar cliente:", error)
       setAlertaConfig({
-        aberto: true,
-        tipo: 'erro',
-        titulo: 'Erro na Edição',
-        mensagem: 'Falha ao atualizar os dados do cliente no banco. Verifique as colunas.',
-        onConfirmar: null
+        aberto: true, tipo: 'erro', titulo: 'Erro na Edição',
+        mensagem: 'Falha ao atualizar os dados do cliente no banco. Verifique as colunas.', onConfirmar: null
       })
     }
   }
@@ -139,13 +147,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
     if (!clienteSelecionado || carrinho.length === 0) return
 
     if (metodoVenda === 'Crediário' && !dataPrimeiraParcela) {
-      setAlertaConfig({
-        aberto: true,
-        tipo: 'aviso',
-        titulo: 'Atenção',
-        mensagem: 'Por favor, selecione a data da primeira parcela do carnê.',
-        onConfirmar: null
-      });
+      setAlertaConfig({ aberto: true, tipo: 'aviso', titulo: 'Atenção', mensagem: 'Selecione a data da primeira parcela do carnê.' });
       return;
     }
 
@@ -155,32 +157,49 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
       titulo: 'Finalizar Checkout',
       mensagem: `Confirma o fechamento da venda de R$ ${totalComDesconto.toFixed(2)} para o cliente ${clienteSelecionado.nome}?`,
       onConfirmar: async () => {
-        const produtosResSummary = carrinho.map(item => item.produto).join(', ')
-        const dataOcorrencia = new Date(`${dataVenda}T12:00:00`).toISOString()
+        setSalvandoVenda(true) // Mostra loading
         
-        // Define o método final (incluindo as parcelas do cartão ou forma da entrada do crediário)
-        let metodoFinal = metodoVenda;
-        if (metodoVenda === 'Cartão de Crédito' && parcelasCartao > 1) {
-          metodoFinal = `Cartão de Crédito (${parcelasCartao}x)`;
-        } else if (metodoVenda === 'Crediário' && entrada > 0) {
-          metodoFinal = `Crediário (Entrada: ${metodoEntrada})`;
-        }
-
         try {
+          // 1. FAZ O UPLOAD DAS FOTOS PARA A NUVEM PRIMEIRO
+          let urlsDasFotos = []
+if (fotos.length > 0) {
+  // Puxando a chave do arquivo .env com o padrão do Vite
+  const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY; 
+  
+  for (const foto of fotos) {
+    const formData = new FormData();
+    formData.append('image', foto.file);
+    
+    const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (data.success) {
+      urlsDasFotos.push(data.data.url);
+    }
+  }
+}
+          const fotosUrlString = urlsDasFotos.join(','); // Salva como "url1,url2,url3"
+
+          // 2. SALVA A VENDA NO TURSO COM OS LINKS
+          const produtosResSummary = carrinho.map(item => item.produto).join(', ')
+          const dataOcorrencia = new Date(`${dataVenda}T12:00:00`).toISOString()
+          
+          let metodoFinal = metodoVenda;
+          if (metodoVenda === 'Cartão de Crédito' && parcelasCartao > 1) {
+            metodoFinal = `Cartão de Crédito (${parcelasCartao}x)`;
+          } else if (metodoVenda === 'Crediário' && entrada > 0) {
+            metodoFinal = `Crediário (Entrada: ${metodoEntrada})`;
+          }
+
           const resVenda = await turso.execute({
             sql: `INSERT INTO vendas 
-                  (cliente_id, produtos, subtotal, desconto, total_liquido, valor_entrada, metodo_venda, criado_em, observacoes) 
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  (cliente_id, produtos, subtotal, desconto, total_liquido, valor_entrada, metodo_venda, criado_em, observacoes, fotos_url) 
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             args: [
-              clienteSelecionado.id, 
-              produtosResSummary, 
-              subtotal, 
-              valorDesconto, 
-              totalComDesconto, 
-              entrada, 
-              metodoFinal, 
-              dataOcorrencia,
-              observacoes
+              clienteSelecionado.id, produtosResSummary, subtotal, valorDesconto, 
+              totalComDesconto, entrada, metodoFinal, dataOcorrencia, observacoes, fotosUrlString
             ]
           })
 
@@ -188,54 +207,36 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
 
           if (metodoVenda === 'Crediário' && valorFinanciado > 0) {
             const [anoVenc, mesVenc, diaVenc] = dataPrimeiraParcela.split('-').map(Number);
-            
             for (let i = 1; i <= numParcelas; i++) {
               let dataVenc = new Date(anoVenc, (mesVenc - 1) + (i - 1), diaVenc);
-              
               await turso.execute({
                 sql: "INSERT INTO parcelas_carne (venda_id, numero_parcela, valor_parcela, data_vencimento, status) VALUES (?, ?, ?, ?, ?)",
-                args: [
-                  vendaId, 
-                  `${i}/${numParcelas}`, 
-                  valorPorParcela, 
-                  dataVenc.toISOString().split('T')[0], 
-                  'Pendente'
-                ]
+                args: [vendaId, `${i}/${numParcelas}`, valorPorParcela, dataVenc.toISOString().split('T')[0], 'Pendente']
               })
             }
           }
 
           await carregarLancamentosDoBanco()
           
-          setBuscaCliente('')
-          setClienteSelecionado(null)
-          setCarrinho([])
-          setDesconto('')
-          setValorEntrada('')
-          setMetodoEntrada('Dinheiro') // Reseta a forma da entrada
-          setNumParcelas(1)
-          setParcelasCartao(1)
-          setDataPrimeiraParcela('')
-          setObservacoes('')
-          setDataVenda(new Date().toISOString().split('T')[0]) 
-          setModalAberto(false)
+          // Limpeza do estado
+          setBuscaCliente(''); setClienteSelecionado(null); setCarrinho([]); setDesconto('');
+          setValorEntrada(''); setMetodoEntrada('Dinheiro'); setNumParcelas(1); setParcelasCartao(1);
+          setDataPrimeiraParcela(''); setObservacoes(''); setFotos([]);
+          setDataVenda(new Date().toISOString().split('T')[0]); 
+          setModalAberto(false);
 
           setAlertaConfig({
-            aberto: true,
-            tipo: 'sucesso',
-            titulo: 'Checkout Concluído',
-            mensagem: `A venda foi armazenada com sucesso sob a OS #${vendaId}.`,
-            onConfirmar: null
+            aberto: true, tipo: 'sucesso', titulo: 'Checkout Concluído',
+            mensagem: `A venda foi armazenada com sucesso sob a OS #${vendaId}.`, onConfirmar: null
           })
         } catch (error) {
-          console.error("Erro ao registrar venda no Turso:", error)
+          console.error("Erro ao registrar venda:", error)
           setAlertaConfig({
-            aberto: true,
-            tipo: 'erro',
-            titulo: 'Erro Relacional',
-            mensagem: 'Houve um problema de transação. Verifique se a coluna "observacoes" foi criada na tabela vendas.',
-            onConfirmar: null
+            aberto: true, tipo: 'erro', titulo: 'Erro Relacional',
+            mensagem: 'Houve um problema. Verifique se a chave do ImgBB está correta e as colunas criadas.', onConfirmar: null
           })
+        } finally {
+          setSalvandoVenda(false)
         }
       }
     })
@@ -243,8 +244,16 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
 
   return (
     <>
-      <form onSubmit={handleSalvarVenda} className="p-4 sm:p-6 space-y-5 max-h-[85vh] overflow-y-auto w-full">
+      <form onSubmit={handleSalvarVenda} className="p-4 sm:p-6 space-y-5 max-h-[85vh] overflow-y-auto w-full relative">
         
+        {/* SOBREPOSIÇÃO DE CARREGAMENTO (Bloqueia a tela enquanto sobe as fotos) */}
+        {salvandoVenda && (
+          <div className="absolute inset-0 bg-white/70 backdrop-blur-sm z-10 flex flex-col items-center justify-center rounded-xl">
+            <Loader2 className="w-10 h-10 animate-spin text-royalBlue mb-3" />
+            <p className="font-bold text-royalBlue text-sm animate-pulse">Fazendo upload das imagens e gerando OS...</p>
+          </div>
+        )}
+
         {/* SELETOR DE DATA DA VENDA E CONDICIONAIS DE TOPO RESPONSIVOS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 relative">
           
@@ -316,7 +325,6 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             )}
           </div>
 
-          {/* CAMPO DE SELEÇÃO DE DATA DA OPERAÇÃO */}
           <div className="col-span-1">
             <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Data da Venda</label>
             <input 
@@ -328,7 +336,6 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             />
           </div>
 
-          {/* FORMA DE LIQUIDAÇÃO */}
           <div className="col-span-1">
             <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Pagamento</label>
             <select 
@@ -343,7 +350,6 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             </select>
           </div>
 
-          {/* QUANTIDADE DE PARCELAS NO CARTÃO */}
           {metodoVenda === 'Cartão de Crédito' && (
             <div className="col-span-1 sm:col-span-2 p-3 bg-blue-50 border border-blue-100 rounded-lg flex items-center justify-between">
               <span className="text-xs font-medium text-blue-800">Em quantas vezes no cartão?</span>
@@ -393,7 +399,6 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
             </button>
           </div>
 
-          {/* VISUALIZAÇÃO DO CARRINHO */}
           <div className="bg-white rounded-lg border border-slate-200 divide-y divide-slate-100 max-h-32 overflow-y-auto shadow-inner">
             {carrinho.length > 0 ? (
               carrinho.map((item) => (
@@ -424,23 +429,16 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Valor de Entrada (R$)</label>
                 <input 
-                  type="number" 
-                  step="0.01"
+                  type="number" step="0.01"
                   className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-royalBlue"
-                  placeholder="0,00"
-                  value={valorEntrada}
-                  onChange={(e) => setValorEntrada(e.target.value)}
+                  placeholder="0,00" value={valorEntrada} onChange={(e) => setValorEntrada(e.target.value)}
                 />
               </div>
-              
-              {/* NOVO CAMPO: Forma de Pagamento da Entrada */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Paga em</label>
                 <select 
                   className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:border-royalBlue disabled:opacity-50 disabled:cursor-not-allowed"
-                  value={metodoEntrada}
-                  onChange={(e) => setMetodoEntrada(e.target.value)}
-                  disabled={!valorEntrada || parseFloat(valorEntrada) <= 0}
+                  value={metodoEntrada} onChange={(e) => setMetodoEntrada(e.target.value)} disabled={!valorEntrada || parseFloat(valorEntrada) <= 0}
                 >
                   <option value="Dinheiro">Dinheiro</option>
                   <option value="Pix">Pix</option>
@@ -448,15 +446,12 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                   <option value="Cartão de Crédito">Cartão de Crédito</option>
                 </select>
               </div>
-
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Nº de Parcelas</label>
                 <input 
-                  type="number" 
-                  min="1" 
+                  type="number" min="1" 
                   className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none text-center focus:border-royalBlue"
-                  value={numParcelas}
-                  onChange={(e) => setNumParcelas(parseInt(e.target.value) || 1)}
+                  value={numParcelas} onChange={(e) => setNumParcelas(parseInt(e.target.value) || 1)}
                 />
               </div>
               <div>
@@ -464,8 +459,7 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
                 <input 
                   type="date" 
                   className="w-full border border-slate-300 bg-white rounded-lg px-2.5 py-1.5 text-xs font-bold focus:outline-none focus:border-royalBlue"
-                  value={dataPrimeiraParcela}
-                  onChange={(e) => setDataPrimeiraParcela(e.target.value)}
+                  value={dataPrimeiraParcela} onChange={(e) => setDataPrimeiraParcela(e.target.value)}
                 />
               </div>
             </div>
@@ -477,16 +471,42 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
           </div>
         )}
 
-        {/* CAMPO DE OBSERVAÇÕES */}
-        <div>
-          <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Observações da Receita / OS</label>
-          <textarea 
-            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-slate-50 shadow-sm resize-none"
-            rows="2"
-            placeholder="Ex: Lente multifocal, AR verde, Armação entregue pelo cliente..."
-            value={observacoes}
-            onChange={(e) => setObservacoes(e.target.value)}
-          ></textarea>
+        {/* CAMPO DE OBSERVAÇÕES E FOTOS DA OS */}
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-4">
+          <div>
+            <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Observações da Receita / OS</label>
+            <textarea 
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm resize-none"
+              rows="2"
+              placeholder="Ex: Lente multifocal, AR verde, Armação entregue pelo cliente..."
+              value={observacoes}
+              onChange={(e) => setObservacoes(e.target.value)}
+            ></textarea>
+          </div>
+          
+          {/* UPLOAD DE FOTOS (GALERIA) */}
+          <div>
+            <label className="block text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Anexar Fotos (Receita, Cópia de Doc, etc)</label>
+            <div className="flex flex-wrap gap-3">
+              {fotos.map((foto) => (
+                <div key={foto.id} className="relative w-20 h-20 rounded-lg overflow-hidden border border-slate-300 shadow-sm bg-white group">
+                  <img src={foto.preview} alt="preview" className="w-full h-full object-cover" />
+                  <button 
+                    type="button" 
+                    onClick={() => removerFoto(foto.id)} 
+                    className="absolute top-1 right-1 bg-white/90 text-rose-500 rounded-full p-0.5 hover:bg-rose-500 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <XCircle className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              <label className="w-20 h-20 flex flex-col items-center justify-center border-2 border-dashed border-royalBlue/40 bg-white rounded-lg text-royalBlue hover:bg-royalBlue/5 cursor-pointer transition-colors">
+                <ImagePlus className="w-6 h-6 mb-1" />
+                <span className="text-[9px] font-bold uppercase tracking-wider">Adicionar</span>
+                <input type="file" multiple accept="image/*" className="hidden" onChange={handleAdicionarFoto} />
+              </label>
+            </div>
+          </div>
         </div>
 
         {/* BLOCO TOTALIZADOR FINAL */}
@@ -535,14 +555,14 @@ export default function Vendas({ setModalAberto, carregarLancamentosDoBanco, cli
 
         {/* BOTOES */}
         <div className="flex space-x-3 pt-2">
-          <button type="button" onClick={() => setModalAberto(false)} className="w-1/3 bg-slate-100 py-2.5 rounded-lg font-medium text-xs sm:text-sm text-slate-600 hover:bg-slate-200 transition-colors">Cancelar</button>
+          <button type="button" onClick={() => setModalAberto(false)} disabled={salvandoVenda} className="w-1/3 bg-slate-100 py-2.5 rounded-lg font-medium text-xs sm:text-sm text-slate-600 hover:bg-slate-200 transition-colors disabled:opacity-50">Cancelar</button>
           <button 
             type="submit" 
-            disabled={!clienteSelecionado || carrinho.length === 0}
+            disabled={!clienteSelecionado || carrinho.length === 0 || salvandoVenda}
             className={`w-2/3 py-2.5 rounded-lg font-bold text-xs sm:text-sm border-b-2 border-gold text-white text-center transition-all shadow-md active:scale-[0.99]
-              ${!clienteSelecionado || carrinho.length === 0 ? 'bg-slate-300 border-slate-400 cursor-not-allowed opacity-50' : 'bg-royalBlue hover:bg-royalBlue-light'}`}
+              ${(!clienteSelecionado || carrinho.length === 0 || salvandoVenda) ? 'bg-slate-300 border-slate-400 cursor-not-allowed opacity-50' : 'bg-royalBlue hover:bg-royalBlue-light'}`}
           >
-            Confirmar e Finalizar Checkout
+            {salvandoVenda ? 'Gerando OS...' : 'Confirmar e Finalizar Checkout'}
           </button>
         </div>
 

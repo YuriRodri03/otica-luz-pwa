@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save, RotateCcw } from 'lucide-react'
+import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save, RotateCcw, ImageIcon } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Clientes({ clientes = [], setClientes }) {
@@ -16,6 +16,9 @@ export default function Clientes({ clientes = [], setClientes }) {
   // Histórico estruturado por Vendas agrupadas
   const [vendasAgrupadas, setVendasAgrupadas] = useState([])
   const [vendaAbertaId, setVendaAbertaId] = useState(null)
+  
+  // Foto Ampliada (Zoom)
+  const [fotoAmpliada, setFotoAmpliada] = useState(null)
 
   // Controle de Pagamentos
   const [datasPagamento, setDatasPagamento] = useState({})
@@ -33,7 +36,7 @@ export default function Clientes({ clientes = [], setClientes }) {
     totalVenda: '' 
   })
 
-  // Estados do formulário de cadastro/edição de clientes (COM ENDEREÇO NOVO)
+  // Estados do formulário de cadastro/edição de clientes
   const [nome, setNome] = useState('')
   const [cpf, setCpf] = useState('')
   const [dataNascimento, setDataNascimento] = useState('')
@@ -125,6 +128,12 @@ export default function Clientes({ clientes = [], setClientes }) {
             pagoEm: p.pago_em ? p.pago_em.split('T')[0] : null
           }))
 
+        // Desmembra os links das fotos salvos no Turso
+        let arrayFotos = []
+        if (vendaRow.fotos_url) {
+          arrayFotos = vendaRow.fotos_url.split(',').filter(url => url.trim() !== '')
+        }
+
         return {
           id: vendaRow.id,
           data: vendaRow.criado_em ? vendaRow.criado_em.split('T')[0] : hojeStr,
@@ -134,6 +143,8 @@ export default function Clientes({ clientes = [], setClientes }) {
           desconto: vendaRow.desconto || 0,
           entrada: vendaRow.valor_entrada || 0,
           totalVenda: vendaRow.total_liquido || 0, 
+          observacoesOS: vendaRow.observacoes || '',
+          fotos: arrayFotos,
           parcelas: parcelasDaVenda
         }
       })
@@ -473,6 +484,16 @@ export default function Clientes({ clientes = [], setClientes }) {
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-full overflow-hidden">
       
+      {/* Visualizador de Imagem (Full Screen) */}
+      {fotoAmpliada && (
+        <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-4" onClick={() => setFotoAmpliada(null)}>
+          <button className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-rose-500 transition-colors bg-black/50 p-2 rounded-full">
+            <XCircle className="w-8 h-8" />
+          </button>
+          <img src={fotoAmpliada} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" alt="Foto Ampliada" />
+        </div>
+      )}
+
       {/* CABEÇALHO */}
       <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-5">
         <div>
@@ -579,6 +600,7 @@ export default function Clientes({ clientes = [], setClientes }) {
                             <span className="flex items-center"><Calendar className="w-3 h-3 mr-1" /> {formatarDataBR(venda.data)}</span>
                             <span>Tipo: <strong className="text-royalBlue">{venda.metodo}</strong></span>
                             {venda.entrada > 0 && <span className="text-emerald-600 font-bold">Entrad.: R$ {venda.entrada.toFixed(2)}</span>}
+                            {venda.fotos.length > 0 && <span className="flex items-center text-amber-600"><ImageIcon className="w-3 h-3 mr-1"/> {venda.fotos.length} Foto(s)</span>}
                           </div>
                         </div>
 
@@ -604,72 +626,107 @@ export default function Clientes({ clientes = [], setClientes }) {
                       </div>
 
                       {vendaAbertaId === venda.id && (
-                        <div className="p-3 sm:p-4 border-t border-slate-100 bg-white space-y-3">
-                          <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider">Detalhamento do Recebimento / Carnê</h4>
-                          {venda.parcelas.length > 0 ? (
-                            <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
-                              {venda.parcelas.map(parc => (
-                                <div key={parc.id} className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-slate-50/50">
-                                  <div className="flex justify-between sm:flex-col sm:space-y-0.5 w-full sm:w-auto">
-                                    <p className="font-bold text-slate-700">Parcela {parc.numero}</p>
-                                    <p className="text-slate-400 font-medium">Venc.: {formatarDataBR(parc.vencimento)}</p>
-                                    {parc.status === 'Pago' && parc.pagoEm && (
-                                      <p className="text-emerald-600 font-medium text-[11px]">Recebido em: {formatarDataBR(parc.pagoEm)}</p>
-                                    )}
-                                  </div>
-                                  <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-dashed border-slate-100">
-                                    <p className="font-bold text-slate-800 shrink-0 min-w-[70px] text-right">
-                                      R$ {parseFloat(parc.valor).toFixed(2)}
-                                    </p>
-                                    <div className="flex items-center space-x-2">
-                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{parc.status}</span>
-                                      
-                                      {parc.status !== 'Pago' ? (
-                                        <div className="flex flex-col sm:flex-row items-center bg-slate-50 p-1.5 rounded-md border border-slate-200 gap-2 sm:gap-1.5 mt-2 sm:mt-0 shadow-sm">
-                                          <div className="flex flex-col w-full sm:w-auto">
-                                            <span className="text-[9px] text-slate-500 font-bold uppercase px-1">Valor Pago (R$)</span>
-                                            <input 
-                                              type="number"
-                                              step="0.01"
-                                              className="border border-slate-200 bg-white rounded text-[11px] font-bold text-royalBlue focus:outline-none focus:border-royalBlue p-1 w-full sm:w-20"
-                                              value={valoresPagamento[parc.id] !== undefined ? valoresPagamento[parc.id] : parc.valor}
-                                              onChange={(e) => setValoresPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
-                                            />
-                                          </div>
-                                          <div className="flex flex-col w-full sm:w-auto sm:border-l border-slate-200 sm:pl-1.5">
-                                            <span className="text-[9px] text-slate-500 font-bold uppercase px-1">Data Rec.</span>
-                                            <input 
-                                              type="date" 
-                                              className="border border-slate-200 bg-white rounded text-[11px] font-medium text-slate-700 focus:outline-none focus:border-royalBlue p-1 w-full sm:w-auto"
-                                              value={datasPagamento[parc.id] || ''} 
-                                              onChange={(e) => setDatasPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
-                                            />
-                                          </div>
-                                          <button 
-                                            onClick={() => baixarParcelaDoCliente(parc)} 
-                                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-3 py-1.5 rounded transition-colors w-full sm:w-auto mt-1 sm:mt-0 self-end"
-                                          >
-                                            Liquidar
-                                          </button>
-                                        </div>
-                                      ) : (
-                                        <button 
-                                          onClick={() => estornarBaixaParcela(parc)}
-                                          className="flex items-center space-x-1 text-[10px] font-semibold text-rose-600 hover:text-white hover:bg-rose-600 bg-rose-50 border border-rose-200 px-2 py-1 rounded transition-all shadow-sm"
-                                          title="Estornar baixa da parcela"
-                                        >
-                                          <RotateCcw className="w-3 h-3" />
-                                          <span>Estornar</span>
-                                        </button>
-                                      )}
-                                    </div>
+                        <div className="p-3 sm:p-4 border-t border-slate-100 bg-white">
+                          
+                          {/* SESSÃO DE OBSERVAÇÕES E FOTOS */}
+                          {(venda.observacoesOS || venda.fotos.length > 0) && (
+                            <div className="mb-5 pb-5 border-b border-slate-100">
+                              {venda.observacoesOS && (
+                                <div className="mb-3">
+                                  <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Observações da OS</h4>
+                                  <p className="text-xs text-slate-600 bg-slate-50 p-2.5 rounded-lg border border-slate-200 leading-relaxed">
+                                    {venda.observacoesOS}
+                                  </p>
+                                </div>
+                              )}
+                              
+                              {venda.fotos.length > 0 && (
+                                <div>
+                                  <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Anexos e Receitas</h4>
+                                  <div className="flex flex-wrap gap-2">
+                                    {venda.fotos.map((url, idx) => (
+                                      <img 
+                                        key={idx} 
+                                        src={url} 
+                                        alt={`Anexo OS ${venda.id}`} 
+                                        className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg border border-slate-300 cursor-pointer hover:opacity-80 transition-opacity shadow-sm" 
+                                        onClick={() => setFotoAmpliada(url)} 
+                                      />
+                                    ))}
                                   </div>
                                 </div>
-                              ))}
+                              )}
                             </div>
-                          ) : (
-                            <p className="text-xs text-emerald-600 font-semibold bg-emerald-50 p-2.5 rounded border border-emerald-100 block w-full">✓ Venda à vista liquidada integralmente.</p>
                           )}
+
+                          {/* SESSÃO DE PARCELAS */}
+                          <div className="space-y-3">
+                            <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider">Detalhamento do Recebimento / Carnê</h4>
+                            {venda.parcelas.length > 0 ? (
+                              <div className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
+                                {venda.parcelas.map(parc => (
+                                  <div key={parc.id} className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-slate-50/50">
+                                    <div className="flex justify-between sm:flex-col sm:space-y-0.5 w-full sm:w-auto">
+                                      <p className="font-bold text-slate-700">Parcela {parc.numero}</p>
+                                      <p className="text-slate-400 font-medium">Venc.: {formatarDataBR(parc.vencimento)}</p>
+                                      {parc.status === 'Pago' && parc.pagoEm && (
+                                        <p className="text-emerald-600 font-medium text-[11px]">Recebido em: {formatarDataBR(parc.pagoEm)}</p>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 w-full sm:w-auto pt-1 sm:pt-0 border-t sm:border-t-0 border-dashed border-slate-100">
+                                      <p className="font-bold text-slate-800 shrink-0 min-w-[70px] text-right">
+                                        R$ {parseFloat(parc.valor).toFixed(2)}
+                                      </p>
+                                      <div className="flex items-center space-x-2">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${parc.status === 'Pago' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{parc.status}</span>
+                                        
+                                        {parc.status !== 'Pago' ? (
+                                          <div className="flex flex-col sm:flex-row items-center bg-slate-50 p-1.5 rounded-md border border-slate-200 gap-2 sm:gap-1.5 mt-2 sm:mt-0 shadow-sm">
+                                            <div className="flex flex-col w-full sm:w-auto">
+                                              <span className="text-[9px] text-slate-500 font-bold uppercase px-1">Valor Pago (R$)</span>
+                                              <input 
+                                                type="number"
+                                                step="0.01"
+                                                className="border border-slate-200 bg-white rounded text-[11px] font-bold text-royalBlue focus:outline-none focus:border-royalBlue p-1 w-full sm:w-20"
+                                                value={valoresPagamento[parc.id] !== undefined ? valoresPagamento[parc.id] : parc.valor}
+                                                onChange={(e) => setValoresPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
+                                              />
+                                            </div>
+                                            <div className="flex flex-col w-full sm:w-auto sm:border-l border-slate-200 sm:pl-1.5">
+                                              <span className="text-[9px] text-slate-500 font-bold uppercase px-1">Data Rec.</span>
+                                              <input 
+                                                type="date" 
+                                                className="border border-slate-200 bg-white rounded text-[11px] font-medium text-slate-700 focus:outline-none focus:border-royalBlue p-1 w-full sm:w-auto"
+                                                value={datasPagamento[parc.id] || ''} 
+                                                onChange={(e) => setDatasPagamento(prev => ({ ...prev, [parc.id]: e.target.value }))}
+                                              />
+                                            </div>
+                                            <button 
+                                              onClick={() => baixarParcelaDoCliente(parc)} 
+                                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-3 py-1.5 rounded transition-colors w-full sm:w-auto mt-1 sm:mt-0 self-end"
+                                            >
+                                              Liquidar
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button 
+                                            onClick={() => estornarBaixaParcela(parc)}
+                                            className="flex items-center space-x-1 text-[10px] font-semibold text-rose-600 hover:text-white hover:bg-rose-600 bg-rose-50 border border-rose-200 px-2 py-1 rounded transition-all shadow-sm"
+                                            title="Estornar baixa da parcela"
+                                          >
+                                            <RotateCcw className="w-3 h-3" />
+                                            <span>Estornar</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-emerald-600 font-semibold bg-emerald-50 p-2.5 rounded border border-emerald-100 block w-full">✓ Venda à vista liquidada integralmente.</p>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
