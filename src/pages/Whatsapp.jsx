@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { QrCode, RefreshCw, CheckCircle, XCircle, Loader2, AlertTriangle, MessageSquare, Save } from 'lucide-react';
+import { QrCode, RefreshCw, CheckCircle, XCircle, Loader2, AlertTriangle, MessageSquare, Save, Power } from 'lucide-react';
 
 export default function WhatsappControl() {
   const [status, setStatus] = useState('Buscando...');
@@ -9,20 +9,15 @@ export default function WhatsappControl() {
   // Controle dos templates de mensagens editáveis
   const [msgAniversario, setMsgAniversario] = useState('');
   const [msgPosVenda, setMsgPosVenda] = useState('');
-  const [msgUmAno, setMsgUmAno] = useState(''); // NOVO: Estado para a mensagem de 1 ano
+  const [msgUmAno, setMsgUmAno] = useState('');
   
   const [salvandoConfig, setSalvandoConfig] = useState(false);
   const [carregandoConfig, setCarregandoConfig] = useState(true);
 
-  // Referência para evitar múltiplos fetches simultâneos acumulados
-  const abortControllerRef = useRef(null);
-
-  // ==========================================
   // ESTADO PARA MODAL DE AVISO / CONFIRMAÇÃO INTEGRADO
-  // ==========================================
   const [alertaConfig, setAlertaConfig] = useState({
     aberto: false,
-    tipo: 'aviso', // 'confirmacao' | 'erro' | 'sucesso'
+    tipo: 'aviso',
     titulo: '',
     mensagem: '',
     onConfirmar: null
@@ -30,67 +25,67 @@ export default function WhatsappControl() {
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://otica-luz-pwa.onrender.com'; 
 
+  // ==========================================
+  // CHECAGEM DE STATUS ADAPTADA PARA O RENDER
+  // ==========================================
   const checarStatusConexao = async () => {
-    // Cancelar requisição anterior se ainda estiver rodando (evita gargalo no Render)
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    abortControllerRef.current = new AbortController();
-
     try {
-      const res = await fetch(`${API_URL}/api/whatsapp/status`, {
-        signal: abortControllerRef.current.signal
-      });
+      const res = await fetch(`${API_URL}/api/whatsapp/status`);
+      if (!res.ok) throw new Error('Servidor indisponível');
+      
       const dados = await res.json();
       setStatus(dados.status || 'Desconectado');
       setQr(dados.qr);
     } catch (error) {
-      if (error.name !== 'AbortError') {
-        // Se falhar (ex: Render acordando), não trava a tela de carregamento para sempre
-        setStatus('Aguardando Servidor...');
-        setQr(null);
-      }
+      // Se der erro de conexão, verificamos se não estávamos já no estado de "Acordando"
+      setStatus(prev => prev === 'Acordando Servidor...' ? prev : 'Servidor Inativo');
+      setQr(null);
     }
   };
 
-  // Carrega as mensagens salvas no banco de dados do Turso com tratamento de falhas
+  const acordarServidorRender = async () => {
+    setStatus('Acordando Servidor...');
+    try {
+      // O Render no plano free trava o primeiro request por ~50s enquanto liga a máquina
+      await fetch(`${API_URL}/api/whatsapp/status`);
+      checarStatusConexao();
+    } catch (error) {
+      console.log("Aguardando boot do Render...");
+    }
+  };
+
   const carregarTemplatesMensagens = async () => {
     try {
       setCarregandoConfig(true);
       const res = await fetch(`${API_URL}/api/whatsapp/config-mensagens`);
+      if (!res.ok) throw new Error();
+      
       const dados = await res.json();
       setMsgAniversario(dados.msg_aniversario || '');
       setMsgPosVenda(dados.msg_pos_venda || '');
-      setMsgUmAno(dados.msg_um_ano || ''); // NOVO: Carrega do banco
+      setMsgUmAno(dados.msg_um_ano || ''); 
     } catch (error) {
-      console.error("Erro ao carregar templates de mensagens:", error);
-      // Fallback amigável caso o banco falhe temporariamente para não deixar vazio
+      // Fallbacks em caso de falha ou servidor dormindo
       setMsgAniversario(prev => prev || 'Olá, {nome}! 🎉 Feliz Aniversário!');
       setMsgPosVenda(prev => prev || 'Olá, {nome}! Obrigado por comprar o produto {produtos}.');
-      setMsgUmAno(prev => prev || 'Olá, {nome}! Hoje faz exatamente um ano que você adquiriu {produtos} conosco. Que tal agendar uma nova avaliação da sua visão?'); // NOVO: Fallback
+      setMsgUmAno(prev => prev || 'Olá, {nome}! Hoje faz exatamente um ano que você adquiriu {produtos} conosco. Que tal agendar uma nova avaliação da sua visão?');
     } finally {
       setCarregandoConfig(false);
     }
   };
 
-  // Monitoramento ativo e carregamento inicial resiliente
+  // Atualiza automaticamente a cada 10 segundos
   useEffect(() => {
     checarStatusConexao();
     carregarTemplatesMensagens();
 
     const intervalo = setInterval(() => {
       checarStatusConexao();
-    }, 5000);
+    }, 10000);
 
-    return () => {
-      clearInterval(intervalo);
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-    };
+    return () => clearInterval(intervalo);
   }, []);
 
-  // Envia os novos templates de texto para o Node.js
   const handleSalvarMensagens = async (e) => {
     e.preventDefault();
     setSalvandoConfig(true);
@@ -101,7 +96,7 @@ export default function WhatsappControl() {
         body: JSON.stringify({
           msg_aniversario: msgAniversario,
           msg_pos_venda: msgPosVenda,
-          msg_um_ano: msgUmAno // NOVO: Envia para salvar
+          msg_um_ano: msgUmAno 
         })
       });
       const resultado = await res.json();
@@ -119,7 +114,7 @@ export default function WhatsappControl() {
         aberto: true,
         tipo: 'erro',
         titulo: 'Erro ao Salvar',
-        mensagem: 'Não foi possível atualizar as mensagens no servidor. Verifique a conexão.',
+        mensagem: 'O servidor no Render pode estar dormindo. Acorde-o antes de salvar.',
         onConfirmar: null
       });
     } finally {
@@ -128,24 +123,26 @@ export default function WhatsappControl() {
   };
 
   // ==========================================
-  // DESCONEXÃO DO CONTEXTO
+  // DESCONEXÃO FORÇADA
   // ==========================================
   const handleDesconectar = () => {
     setAlertaConfig({
       aberto: true,
       tipo: 'confirmacao',
-      titulo: 'Desconectar WhatsApp',
-      mensagem: 'Tem certeza que deseja desvincular o WhatsApp da Ótica Luz? O robô interromperá as rotinas de disparos automatizados.',
+      titulo: 'Desvincular WhatsApp',
+      mensagem: 'Isso limpará a sessão do banco Turso. O robô vai reiniciar e exigirá a leitura de um novo QR Code. Continuar?',
       onConfirmar: async () => {
         setCarregando(true);
         try {
           await fetch(`${API_URL}/api/whatsapp/desconectar`, { method: 'POST' });
-          await checarStatusConexao();
+          setStatus('Reiniciando...');
+          setQr(null);
+          
           setAlertaConfig({
             aberto: true,
             tipo: 'sucesso',
-            titulo: 'Sessão Encerrada',
-            mensagem: 'O aparelho foi desconectado com sucesso.',
+            titulo: 'Sessão Limpa',
+            mensagem: 'O aparelho foi desconectado e o servidor está reiniciando o motor.',
             onConfirmar: null
           });
         } catch (error) {
@@ -163,11 +160,12 @@ export default function WhatsappControl() {
     });
   };
 
-  // Auxiliares de visualização baseados nos status retornados do Baileys
+  // Auxiliares de visualização baseados nos status
   const isConectado = status === 'Conectado' || status === 'open';
-  const aguardandoQR = status === 'Aguardando Leitura do QR Code' || status === 'notLogged' || status === 'Desconectado' || status === 'close';
+  const isServerOffline = status === 'Servidor Inativo';
+  const isAcordando = status === 'Acordando Servidor...' || status === 'Reiniciando...';
   const isVerificando = status === 'Buscando...' || status === 'Iniciando...' || status === 'Iniciando motor...' || status === 'connecting';
-  const isServerOffline = status === 'Servidor Off-line' || status === 'Aguardando Servidor...';
+  const aguardandoQR = status === 'Aguardando Leitura do QR Code' || status === 'notLogged' || status === 'Desconectado' || status === 'close';
 
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-xl mx-auto w-full overflow-hidden">
@@ -177,45 +175,73 @@ export default function WhatsappControl() {
         
         {/* CABEÇALHO DO PAINEL */}
         <div className="bg-royalBlue p-4 text-white font-bold border-b-4 border-gold flex justify-between items-center text-xs sm:text-sm gap-2">
-          <span className="truncate">Painel do Robô de Disparos - Ótica Luz</span>
-          <button onClick={() => { checarStatusConexao(); carregarTemplatesMensagens(); }} className="p-1.5 hover:bg-white/10 rounded-lg shrink-0 transition-colors" title="Atualizar Status">
-            <RefreshCw className="w-4 h-4" />
+          <span className="truncate">Painel do Motor WhatsApp - Ótica Luz</span>
+          <button 
+            onClick={() => { setStatus('Buscando...'); checarStatusConexao(); carregarTemplatesMensagens(); }} 
+            className="flex items-center space-x-1.5 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-colors border border-white/10 active:scale-95"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${(isVerificando || isAcordando) ? 'animate-spin' : ''}`} />
+            <span className="text-[10px] uppercase tracking-wider font-bold">Atualizar</span>
           </button>
         </div>
 
         <div className="p-4 sm:p-6 flex flex-col items-center justify-center space-y-6">
           
-          {/* INDICADORES DE STATUS */}
-          <div className="flex items-center space-x-3 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-200 w-full justify-center text-center">
+          {/* INDICADORES DE STATUS ADAPTADOS PARA O RENDER */}
+          <div className="flex items-center space-x-3 bg-slate-50 px-4 py-3 rounded-xl border border-slate-200 w-full justify-center text-center">
             {isConectado ? (
               <>
                 <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
-                <span className="text-xs sm:text-sm font-bold text-emerald-700">Sistema Ativo e Conectado!</span>
+                <span className="text-xs sm:text-sm font-bold text-emerald-700">Conectado e Disparando!</span>
+              </>
+            ) : isServerOffline ? (
+              <>
+                <Power className="w-5 h-5 text-rose-500 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold text-rose-600">Servidor em Repouso (Inativo)</span>
+              </>
+            ) : isAcordando ? (
+              <>
+                <Loader2 className="w-5 h-5 text-amber-500 animate-spin shrink-0" />
+                <span className="text-xs sm:text-sm font-bold text-amber-600">Ligando Máquina no Render (~50s)...</span>
               </>
             ) : isVerificando ? (
               <>
                 <Loader2 className="w-5 h-5 text-royalBlue animate-spin shrink-0" />
-                <span className="text-xs sm:text-sm font-bold text-slate-600">Sincronizando serviços...</span>
-              </>
-            ) : isServerOffline ? (
-              <>
-                <Loader2 className="w-5 h-5 text-amber-500 animate-spin shrink-0" />
-                <span className="text-xs sm:text-sm font-bold text-amber-600">Acordando servidor no Render (Pode levar 30s)...</span>
+                <span className="text-xs sm:text-sm font-bold text-slate-600">{status}</span>
               </>
             ) : aguardandoQR ? (
               <>
-                <Loader2 className="w-5 h-5 text-amber-500 animate-spin shrink-0" />
-                <span className="text-xs sm:text-sm font-bold text-amber-600">Aguardando leitura do QR Code...</span>
+                <QrCode className="w-5 h-5 text-amber-500 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold text-amber-600">QR Code Pendente</span>
               </>
             ) : (
               <>
-                <XCircle className="w-5 h-5 text-rose-500 shrink-0" />
-                <span className="text-xs sm:text-sm font-bold text-rose-600 break-all">Status: {status}</span>
+                <XCircle className="w-5 h-5 text-slate-400 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold text-slate-500 break-all">{status}</span>
               </>
             )}
           </div>
 
-          {/* CONTAINER DO QR CODE ADAPTÁVEL */}
+          {/* ESTADO 1: SERVIDOR DORMINDO NO RENDER */}
+          {isServerOffline && (
+            <div className="flex flex-col items-center space-y-4 bg-rose-50/50 p-4 sm:p-6 rounded-xl border border-rose-200 w-full text-center">
+              <AlertTriangle className="w-10 h-10 text-rose-400" />
+              <div className="space-y-1">
+                <h4 className="font-bold text-rose-700 text-sm">O Render suspendeu a aplicação</h4>
+                <p className="text-[11px] sm:text-xs text-rose-600/80 max-w-xs leading-relaxed">
+                  Por ser um plano gratuito, o servidor desligou por inatividade. Clique abaixo para enviar o sinal de "acordar".
+                </p>
+              </div>
+              <button
+                onClick={acordarServidorRender}
+                className="bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 px-6 rounded-lg text-xs sm:text-sm shadow-md transition-colors w-full active:scale-[0.99]"
+              >
+                Ligar Servidor
+              </button>
+            </div>
+          )}
+
+          {/* ESTADO 2: AGUARDANDO QR CODE (QUANDO ACORDAR MAS A SESSÃO NÃO EXISTIR/CAIU) */}
           {aguardandoQR && (
             <div className="flex flex-col items-center space-y-4 bg-slate-50 p-4 sm:p-6 rounded-xl border border-dashed border-slate-300 shadow-inner w-full">
               {qr ? (
@@ -224,32 +250,45 @@ export default function WhatsappControl() {
                     <img src={qr} alt="WhatsApp QR Code" className="max-w-full h-auto rounded-md" />
                   </div>
                   <p className="text-[11px] sm:text-xs text-slate-500 text-center max-w-xs font-medium mt-1 leading-relaxed">
-                    Abra o WhatsApp no celular da loja, vá em <strong>Aparelhos Conectados</strong> e escaneie o código acima.
+                    A sessão anterior foi perdida. Abra o WhatsApp da loja e escaneie o código acima para reconectar.
                   </p>
                 </>
               ) : (
                 <div className="w-full max-w-[256px] aspect-square flex flex-col items-center justify-center space-y-2">
                   <Loader2 className="w-7 h-7 text-slate-300 animate-spin" />
-                  <p className="text-[11px] sm:text-xs text-slate-400 font-medium text-center">Gerando novo QR Code seguro...</p>
+                  <p className="text-[11px] sm:text-xs text-slate-400 font-medium text-center px-4">O servidor acordou e está gerando o QR Code seguro...</p>
                 </div>
               )}
             </div>
           )}
 
           {/* BOTOES DE AÇÃO */}
-          {isConectado && (
-            <div className="text-center space-y-4 w-full">
-              <p className="text-[11px] sm:text-xs text-slate-400 font-medium leading-relaxed">
-                O chip está pareado e enviando mensagens de aniversário e pós-venda de forma automática todos os dias.
-              </p>
-              <button
-                type="button"
-                onClick={handleDesconectar}
-                disabled={carregando}
-                className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-lg text-xs sm:text-sm shadow transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 h-10 active:scale-[0.99]"
-              >
-                {carregando ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Desconectar Aparelho</span>}
-              </button>
+          {!isServerOffline && !isAcordando && (
+            <div className="w-full pt-2">
+              {isConectado ? (
+                <div className="space-y-4">
+                  <p className="text-[11px] sm:text-xs text-slate-400 text-center font-medium leading-relaxed">
+                    O WhatsApp está pareado. As rotinas automáticas de aniversário e pós-venda estão sendo gerenciadas.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDesconectar}
+                    disabled={carregando}
+                    className="w-full bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 font-bold py-2.5 rounded-lg border border-slate-200 hover:border-rose-200 text-xs sm:text-sm shadow-sm transition-all h-10"
+                  >
+                    {carregando ? 'Aguarde...' : 'Desvincular Aparelho e Limpar Sessão'}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDesconectar}
+                  disabled={carregando}
+                  className="w-full bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200 font-bold py-2.5 rounded-lg text-xs sm:text-sm shadow-sm transition-all h-10"
+                >
+                  {carregando ? 'Aguarde...' : 'A tela travou? Forçar reinicialização'}
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -303,7 +342,7 @@ export default function WhatsappControl() {
             />
           </div>
 
-          {/* NOVO: TEMPLATE PÓS-VENDA 1 ANO */}
+          {/* TEMPLATE PÓS-VENDA 1 ANO */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
               <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider">Mensagem de Reconquista (1 Ano)</label>
@@ -322,10 +361,9 @@ export default function WhatsappControl() {
             />
           </div>
 
-          {/* BOTÃO DE SALVAR MODELOS */}
           <button
             type="submit"
-            disabled={salvandoConfig || carregandoConfig}
+            disabled={salvandoConfig || carregandoConfig || isServerOffline}
             className="w-full bg-royalBlue hover:bg-royalBlue-light text-white font-bold py-2.5 rounded-lg text-xs sm:text-sm shadow transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 h-10 border-b-2 border-gold active:scale-[0.99]"
           >
             {salvandoConfig ? <Loader2 className="w-4 h-4 animate-spin" /> : (
@@ -365,7 +403,7 @@ export default function WhatsappControl() {
                       onClick={() => setAlertaConfig(prev => ({ ...prev, aberto: false }))} 
                       className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors"
                     >
-                      Não, manter
+                      Não, cancelar
                     </button>
                     <button 
                       type="button" 
@@ -373,7 +411,7 @@ export default function WhatsappControl() {
                         if (alertaConfig.onConfirmar) alertaConfig.onConfirmar();
                         setAlertaConfig(prev => ({ ...prev, aberto: false }));
                       }} 
-                      className="bg-royalBlue text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border-b-2 border-gold shadow-sm transition-colors"
+                      className="bg-rose-600 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold shadow-sm transition-colors hover:bg-rose-700"
                     >
                       Sim, executar
                     </button>

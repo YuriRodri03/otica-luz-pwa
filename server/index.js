@@ -50,7 +50,7 @@ let clientesEnviadosHoje = [];
 let diaAtualPosVendaGerenciamento = null;
 let posVendasEnviadosHoje = [];
 
-let diaAtualUmAnoGerenciamento = null; // NOVO: Controle de 1 ano
+let diaAtualUmAnoGerenciamento = null; 
 let vendasUmAnoEnviadosHoje = [];
 
 // ==========================================
@@ -66,7 +66,6 @@ app.get('/api/whatsapp/status', (req, res) => {
 
 app.get('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
-    // NOVO: Adicionado msg_um_ano
     const configs = { msg_aniversario: '', msg_pos_venda: '', msg_um_ano: '' };
     const r = await turso.execute({
       sql: "SELECT chave, valor FROM configuracoes WHERE chave IN ('msg_aniversario', 'msg_pos_venda', 'msg_um_ano')",
@@ -89,7 +88,7 @@ app.get('/api/whatsapp/config-mensagens', async (req, res) => {
 
 app.post('/api/whatsapp/config-mensagens', async (req, res) => {
   try {
-    const { msg_aniversario, msg_pos_venda, msg_um_ano } = req.body; // NOVO: msg_um_ano
+    const { msg_aniversario, msg_pos_venda, msg_um_ano } = req.body; 
     
     if (msg_aniversario !== undefined) {
       await turso.execute({
@@ -105,7 +104,6 @@ app.post('/api/whatsapp/config-mensagens', async (req, res) => {
       });
     }
 
-    // NOVO: Salva a config de 1 ano
     if (msg_um_ano !== undefined) {
       await turso.execute({
         sql: "INSERT OR REPLACE INTO configuracoes (chave, valor) VALUES ('msg_um_ano', ?)",
@@ -120,10 +118,11 @@ app.post('/api/whatsapp/config-mensagens', async (req, res) => {
 });
 
 app.post('/api/whatsapp/desconectar', async (req, res) => {
-  if (!whatsappClient) return res.status(400).json({ error: 'WhatsApp não está ativo.' });
   try {
     statusConexao = 'Desconectando...';
-    await whatsappClient.logout();
+    if (whatsappClient) {
+      await whatsappClient.logout();
+    }
     
     await turso.execute("DELETE FROM configuracoes WHERE chave = 'whatsapp_full_session'");
     
@@ -257,51 +256,60 @@ async function inicializarWhatsApp() {
     });
 
     // ==========================================
-    // 🤖 DISPARADOR AUTOMÁTICO DE MÍDIAS
+    // 🤖 DISPARADOR AUTOMÁTICO DE MÍDIAS (CORRIGIDO)
     // ==========================================
     whatsappClient.ev.on('messages.upsert', async (m) => {
       try {
         const msg = m.messages[0];
-        if (!msg.message) return; 
+        if (!msg.message || msg.key.fromMe) return; // Ignora se foi você mesmo que enviou
 
         const jid = msg.key.remoteJid;
         if (!jid.endsWith('@s.whatsapp.net')) return; 
 
         const textoRecebido = (msg.message.conversation || msg.message.extendedTextMessage?.text || '')
+          .toLowerCase() // Tudo minúsculo para facilitar
           .replace(/\r\n/g, '\n')
           .trim();
 
-        const gatilhoTrafegoPago = `Olá cliente, seja bem-vindo 💡\n\naqui é o José da Ótica Luz, como posso ajudar?`;
+        // Verificação inteligente (ignora se tiver espaços a mais ou emojis diferentes)
+        const isLeadTrafegoPago = textoRecebido.includes('seja bem-vindo') && textoRecebido.includes('ótica luz');
 
-        if (textoRecebido === gatilhoTrafegoPago) {
+        if (isLeadTrafegoPago) {
           const numeroPuro = jid.split('@')[0];
           console.log(`🚀 Lead de tráfego pago detectado para o número: ${numeroPuro}. Enviando mídias...`);
 
+          // URL base onde o frontend está hospedado
+          const BASE_URL_FRONT = 'https://otica-luz.vercel.app';
+
           await new Promise(resolve => setTimeout(resolve, 3000));
 
-          await whatsappClient.sendMessage(jid, {
-            audio: { url: './midias/audio_explicativo.ogg' },
-            mimetype: 'audio/mp4',
-            ptt: true 
-          });
+          try {
+            await whatsappClient.sendMessage(jid, {
+              audio: { url: `${BASE_URL_FRONT}/midias/audio_explicativo.ogg` },
+              mimetype: 'audio/ogg; codecs=opus', // Formato oficial do WhatsApp para Áudio "Gravado na Hora"
+              ptt: true 
+            });
 
-          await new Promise(resolve => setTimeout(resolve, 4000));
+            await new Promise(resolve => setTimeout(resolve, 4000));
 
-          await whatsappClient.sendMessage(jid, {
-            document: { url: './midias/catalogo_feminino.pdf' },
-            mimetype: 'application/pdf',
-            fileName: 'Catálogo Feminino - Ótica Luz.pdf'
-          });
+            await whatsappClient.sendMessage(jid, {
+              document: { url: `${BASE_URL_FRONT}/midias/catalogo_feminino.pdf` },
+              mimetype: 'application/pdf',
+              fileName: 'Catálogo Feminino - Ótica Luz.pdf'
+            });
 
-          await new Promise(resolve => setTimeout(resolve, 1500));
+            await new Promise(resolve => setTimeout(resolve, 1500));
 
-          await whatsappClient.sendMessage(jid, {
-            document: { url: './midias/catalogo_masculino.pdf' },
-            mimetype: 'application/pdf',
-            fileName: 'Catálogo Masculino - Ótica Luz.pdf'
-          });
+            await whatsappClient.sendMessage(jid, {
+              document: { url: `${BASE_URL_FRONT}/midias/catalogo_masculino.pdf` },
+              mimetype: 'application/pdf',
+              fileName: 'Catálogo Masculino - Ótica Luz.pdf'
+            });
 
-          console.log(`✅ Combo de mídias enviado com sucesso para: ${numeroPuro}`);
+            console.log(`✅ Combo de mídias enviado com sucesso para: ${numeroPuro}`);
+          } catch (mediaErr) {
+            console.error('❌ Erro no envio das mídias. As URLs estão acessíveis?', mediaErr.message);
+          }
 
           try {
             await turso.execute({
