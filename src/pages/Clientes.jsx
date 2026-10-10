@@ -17,7 +17,7 @@ export default function Clientes({ clientes = [], setClientes }) {
   const [vendasAgrupadas, setVendasAgrupadas] = useState([])
   const [vendaAbertaId, setVendaAbertaId] = useState(null)
   
-  // Foto Ampliada (Zoom)
+  // Foto Ampliada (Zoom Lightbox)
   const [fotoAmpliada, setFotoAmpliada] = useState(null)
 
   // Controle de Pagamentos
@@ -484,13 +484,21 @@ export default function Clientes({ clientes = [], setClientes }) {
   return (
     <div className="space-y-6 px-1 sm:px-4 max-w-full overflow-hidden">
       
-      {/* Visualizador de Imagem (Full Screen) */}
+      {/* Visualizador de Imagem (Lightbox) MELHORADO */}
       {fotoAmpliada && (
-        <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center p-4" onClick={() => setFotoAmpliada(null)}>
-          <button className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-rose-500 transition-colors bg-black/50 p-2 rounded-full">
-            <XCircle className="w-8 h-8" />
+        <div 
+          className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-sm flex flex-col items-center justify-center p-4 transition-all" 
+          onClick={() => setFotoAmpliada(null)}
+        >
+          <button className="absolute top-4 right-4 sm:top-8 sm:right-8 text-white/70 hover:text-white bg-black/50 hover:bg-rose-500 p-2 rounded-full transition-all">
+            <XCircle className="w-8 h-8 sm:w-10 sm:h-10" />
           </button>
-          <img src={fotoAmpliada} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" alt="Foto Ampliada" />
+          <img 
+            src={fotoAmpliada} 
+            className="max-w-full max-h-[90vh] object-contain rounded-xl shadow-2xl" 
+            alt="Foto Ampliada" 
+            onClick={(e) => e.stopPropagation()} // Impede que clicar na imagem feche o modal
+          />
         </div>
       )}
 
@@ -628,7 +636,7 @@ export default function Clientes({ clientes = [], setClientes }) {
                       {vendaAbertaId === venda.id && (
                         <div className="p-3 sm:p-4 border-t border-slate-100 bg-white">
                           
-                          {/* SESSÃO DE OBSERVAÇÕES E FOTOS */}
+                          {/* SESSÃO DE OBSERVAÇÕES E FOTOS DA OS */}
                           {(venda.observacoesOS || venda.fotos.length > 0) && (
                             <div className="mb-5 pb-5 border-b border-slate-100">
                               {venda.observacoesOS && (
@@ -640,6 +648,7 @@ export default function Clientes({ clientes = [], setClientes }) {
                                 </div>
                               )}
                               
+                              {/* RENDERIZAÇÃO DAS MINIATURAS DAS FOTOS */}
                               {venda.fotos.length > 0 && (
                                 <div>
                                   <h4 className="text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Anexos e Receitas</h4>
@@ -649,8 +658,11 @@ export default function Clientes({ clientes = [], setClientes }) {
                                         key={idx} 
                                         src={url} 
                                         alt={`Anexo OS ${venda.id}`} 
-                                        className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg border border-slate-300 cursor-pointer hover:opacity-80 transition-opacity shadow-sm" 
-                                        onClick={() => setFotoAmpliada(url)} 
+                                        className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg border border-slate-300 cursor-pointer hover:scale-105 hover:shadow-md transition-all" 
+                                        onClick={(e) => {
+                                          e.stopPropagation(); // Evita que o clique feche a OS
+                                          setFotoAmpliada(url);
+                                        }} 
                                       />
                                     ))}
                                   </div>
@@ -926,7 +938,7 @@ export default function Clientes({ clientes = [], setClientes }) {
 
       {/* MODAL DE ALERTA E CONFIRMAÇÃO INTEGRADO */}
       {alertaConfig.aberto && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] backdrop-blur-sm p-4">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[130] backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-4 border-gold">
             <div className="p-5 space-y-4">
               <div className="flex items-start space-x-3">
