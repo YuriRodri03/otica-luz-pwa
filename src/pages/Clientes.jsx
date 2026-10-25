@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save, RotateCcw, ImageIcon } from 'lucide-react'
+import { ArrowLeft, ShoppingBag, User, Loader2, Edit3, Trash2, Search, Calendar, ChevronDown, ChevronUp, AlertTriangle, XCircle, CheckCircle, Save, RotateCcw, ImageIcon, Clock } from 'lucide-react'
 import { turso } from '../tursoClient'
 
 export default function Clientes({ clientes = [], setClientes }) {
@@ -7,6 +7,7 @@ export default function Clientes({ clientes = [], setClientes }) {
   const [clienteSelecionado, setClienteSelecionado] = useState(null)
   const [carregando, setCarregando] = useState(false)
   const [termoBusca, setTermoBusca] = useState('')
+  const [filtroMaisDeUmAno, setFiltroMaisDeUmAno] = useState(false)
   const [idEdicao, setIdEdicao] = useState(null)
 
   // ESTADOS PARA BUSCA DE OS
@@ -59,7 +60,12 @@ export default function Clientes({ clientes = [], setClientes }) {
   const carregarClientesDoBanco = async () => {
     setCarregando(true)
     try {
-      const resultado = await turso.execute("SELECT * FROM clientes")
+      const resultado = await turso.execute(`
+        SELECT c.*, MAX(v.criado_em) as ultima_compra 
+        FROM clientes c 
+        LEFT JOIN vendas v ON c.id = v.cliente_id 
+        GROUP BY c.id
+      `)
       const listaFormatada = resultado.rows.map(row => ({
         id: row.id,
         nome: row.nome,
@@ -71,7 +77,8 @@ export default function Clientes({ clientes = [], setClientes }) {
         numero: row.numero,
         bairro: row.bairro,
         cidade: row.cidade,
-        observacoes: row.observacoes
+        observacoes: row.observacoes,
+        ultimaCompra: row.ultima_compra ? String(row.ultima_compra).split('T')[0].split(' ')[0] : null
       }))
       setClientes(listaFormatada)
     } catch (error) {
@@ -229,6 +236,7 @@ export default function Clientes({ clientes = [], setClientes }) {
         ]
       })
       await carregarHistoricoVendasCliente(clienteSelecionado.id)
+      await carregarClientesDoBanco()
       setModalVendaEdicao({ aberto: false, id: null, produtos: '', metodo: '', subtotal: '', desconto: '', entrada: '', totalVenda: '' })
       setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Sucesso', mensagem: 'Dados da venda retificados com sucesso!', onConfirmar: null })
     } catch (error) {
@@ -247,6 +255,7 @@ export default function Clientes({ clientes = [], setClientes }) {
           await turso.execute({ sql: "DELETE FROM parcelas_carne WHERE venda_id = ?", args: [idVenda] })
           await turso.execute({ sql: "DELETE FROM vendas WHERE id = ?", args: [idVenda] })
           await carregarHistoricoVendasCliente(clienteSelecionado.id)
+          await carregarClientesDoBanco()
           setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Estorno Concluído', mensagem: 'A venda foi removida do sistema.', onConfirmar: null })
         } catch (error) {
           console.error(error)
@@ -403,7 +412,7 @@ export default function Clientes({ clientes = [], setClientes }) {
         try {
           await turso.execute({ sql: "DELETE FROM clientes WHERE id = ?", args: [id] })
           await carregarClientesDoBanco()
-          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Ficha Excluída', mensagem: 'Cliente removido da carteira activa.', onConfirmar: null })
+          setAlertaConfig({ aberto: true, tipo: 'sucesso', titulo: 'Ficha Excluída', mensagem: 'Cliente removido da carteira ativa.', onConfirmar: null })
         } catch (error) {
           console.error(error)
         }
@@ -450,8 +459,23 @@ export default function Clientes({ clientes = [], setClientes }) {
     return telString
   }
 
+  // Verifica se a data da última compra tem 1 ano ou mais
+  const comprouHaMaisDeUmAno = (dataUltimaCompra) => {
+    if (!dataUltimaCompra) return false
+    const hoje = new Date()
+    const umAnoAtras = new Date(hoje.getFullYear() - 1, hoje.getMonth(), hoje.getDate())
+    const dataCompra = new Date(dataUltimaCompra + 'T00:00:00')
+    return dataCompra <= umAnoAtras
+  }
+
   const clientesFiltradosEOrdenados = (clientes || [])
     .filter(c => {
+      // 1. Filtro de compra há mais de 1 ano
+      if (filtroMaisDeUmAno && !comprouHaMaisDeUmAno(c.ultimaCompra)) {
+        return false
+      }
+
+      // 2. Filtro por termo de busca (Nome ou CPF)
       const t = termoBusca.toLowerCase().trim()
       if (!t) return true
       const nomeCliente = String(c.nome || '').toLowerCase()
@@ -497,7 +521,7 @@ export default function Clientes({ clientes = [], setClientes }) {
             src={fotoAmpliada} 
             className="max-w-full max-h-[90vh] object-contain rounded-xl shadow-2xl" 
             alt="Foto Ampliada" 
-            onClick={(e) => e.stopPropagation()} // Impede que clicar na imagem feche o modal
+            onClick={(e) => e.stopPropagation()}
           />
         </div>
       )}
@@ -660,7 +684,7 @@ export default function Clientes({ clientes = [], setClientes }) {
                                         alt={`Anexo OS ${venda.id}`} 
                                         className="w-16 h-16 sm:w-20 sm:h-20 object-cover rounded-lg border border-slate-300 cursor-pointer hover:scale-105 hover:shadow-md transition-all" 
                                         onClick={(e) => {
-                                          e.stopPropagation(); // Evita que o clique feche a OS
+                                          e.stopPropagation();
                                           setFotoAmpliada(url);
                                         }} 
                                       />
@@ -754,10 +778,10 @@ export default function Clientes({ clientes = [], setClientes }) {
         </div>
       )}
 
-      {/* LISTAGEM DE CARTEIRA COM BUSCA GLOBAL DE OS */}
+      {/* LISTAGEM DE CARTEIRA COM BUSCA GLOBAL DE OS E FILTRO DE +1 ANO */}
       {abaAtiva === 'lista' && !clienteSelecionado && !carregando && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row gap-3 w-full">
+          <div className="flex flex-col sm:flex-row gap-3 w-full items-stretch sm:items-center">
             <div className="relative w-full sm:max-w-md">
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none"><Search className="w-4 h-4 text-slate-400" /></span>
               <input type="text" placeholder="Pesquisar cliente por nome ou CPF..." className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm focus:outline-none focus:border-royalBlue bg-white shadow-sm" value={termoBusca} onChange={(e) => setTermoBusca(e.target.value)} />
@@ -774,6 +798,20 @@ export default function Clientes({ clientes = [], setClientes }) {
               />
               <button type="submit" className="hidden">Buscar</button>
             </form>
+
+            {/* BOTÃO DE FILTRO: COMPROU HÁ MAIS DE 1 ANO */}
+            <button
+              type="button"
+              onClick={() => setFiltroMaisDeUmAno(!filtroMaisDeUmAno)}
+              className={`flex items-center justify-center space-x-2 px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold border transition-all shrink-0 shadow-sm ${
+                filtroMaisDeUmAno
+                  ? 'bg-amber-500 text-white border-amber-600 shadow-inner'
+                  : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <Clock className="w-4 h-4 shrink-0" />
+              <span>Comprou há +1 ano</span>
+            </button>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-slate-200 w-full">
@@ -783,28 +821,50 @@ export default function Clientes({ clientes = [], setClientes }) {
                   <tr className="bg-slate-50 text-slate-400 text-[10px] sm:text-xs uppercase font-semibold border-b border-slate-200">
                     <th className="p-3 sm:p-4">Nome</th>
                     <th className="p-3 sm:p-4">CPF</th>
-                    <th className="p-3 sm:p-4">Nascimento</th>
                     <th className="p-3 sm:p-4">Telefone</th>
+                    <th className="p-3 sm:p-4">Última Compra</th>
                     <th className="p-3 sm:p-4 text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
                   {clientesFiltradosEOrdenados.length > 0 ? (
-                    clientesFiltradosEOrdenados.map((cliente) => (
-                      <tr key={cliente.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="p-3 sm:p-4 font-medium text-slate-700">{cliente.nome}</td>
-                        <td className="p-3 sm:p-4 text-slate-500 font-mono">{formatarCPF(cliente.cpf)}</td>
-                        <td className="p-3 sm:p-4 text-slate-500">{formatarDataBR(cliente.dataNascimento)}</td>
-                        <td className="p-3 sm:p-4 text-slate-500">{formatarTelefone(cliente.telefone) || 'Não informado'}</td>
-                        <td className="p-3 sm:p-4 flex items-center justify-center space-x-1.5">
-                          <button onClick={() => setClienteSelecionado(cliente)} className="bg-gold text-wood-dark hover:bg-gold-dark font-bold text-[11px] px-2.5 py-1.5 rounded transition-colors shadow-sm">Histórico</button>
-                          <button onClick={() => { iniciarEdicao(cliente); }} className="p-1.5 bg-slate-100 text-slate-600 hover:bg-royalBlue hover:text-white rounded-lg transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleExcluir(cliente.id, cliente.nome)} className="p-1.5 bg-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
-                        </td>
-                      </tr>
-                    ))
+                    clientesFiltradosEOrdenados.map((cliente) => {
+                      const maisDeUmAno = comprouHaMaisDeUmAno(cliente.ultimaCompra)
+                      return (
+                        <tr key={cliente.id} className="hover:bg-slate-50/80 transition-colors">
+                          <td className="p-3 sm:p-4 font-medium text-slate-700">{cliente.nome}</td>
+                          <td className="p-3 sm:p-4 text-slate-500 font-mono">{formatarCPF(cliente.cpf)}</td>
+                          <td className="p-3 sm:p-4 text-slate-500">{formatarTelefone(cliente.telefone) || 'Não informado'}</td>
+                          <td className="p-3 sm:p-4">
+                            {cliente.ultimaCompra ? (
+                              <div className="flex items-center space-x-2">
+                                <span className="text-slate-600 font-medium">{formatarDataBR(cliente.ultimaCompra)}</span>
+                                {maisDeUmAno && (
+                                  <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-200">
+                                    +1 ano
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic text-xs">Sem compras</span>
+                            )}
+                          </td>
+                          <td className="p-3 sm:p-4 flex items-center justify-center space-x-1.5">
+                            <button onClick={() => setClienteSelecionado(cliente)} className="bg-gold text-wood-dark hover:bg-gold-dark font-bold text-[11px] px-2.5 py-1.5 rounded transition-colors shadow-sm">Histórico</button>
+                            <button onClick={() => { iniciarEdicao(cliente); }} className="p-1.5 bg-slate-100 text-slate-600 hover:bg-royalBlue hover:text-white rounded-lg transition-colors"><Edit3 className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => handleExcluir(cliente.id, cliente.nome)} className="p-1.5 bg-slate-100 text-rose-600 hover:bg-rose-600 hover:text-white rounded-lg transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                          </td>
+                        </tr>
+                      )
+                    })
                   ) : (
-                    <tr><td colSpan="5" className="text-center p-8 text-slate-400">Nenhum cliente correspondente encontrado.</td></tr>
+                    <tr>
+                      <td colSpan="5" className="text-center p-8 text-slate-400">
+                        {filtroMaisDeUmAno 
+                          ? 'Nenhum cliente com última compra há mais de 1 ano foi encontrado.' 
+                          : 'Nenhum cliente correspondente encontrado.'}
+                      </td>
+                    </tr>
                   )}
                 </tbody>
               </table>
